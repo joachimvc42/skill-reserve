@@ -262,6 +262,13 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/founder-skill/skills/founder-plan` | Your business planner. Compiles everything the other founder skills wrote (the board's verdict, the competitors, the buyer panel, pricing, the offer, the CFO's numbers, marketing, brand, operations and the launch plan… |
 | `skills/founder-skill/skills/founder-pricing` | Finds the price buyers will actually pay. Reads the consumer panel's four price answers per buyer into a Van Westendorp price-sensitivity range (too cheap, a bargain, getting expensive, too expensive), sets it against… |
 
+## Skills : impeccable
+
+| Skill | Description |
+|---|---|
+| `skills/impeccable/.claude/skills/impeccable` | Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, se… |
+| `skills/impeccable/plugin/skills/impeccable` | Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, se… |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

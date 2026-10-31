@@ -11,6 +11,7 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `references/ecc-extras/agents/` | Définitions de sous-agents ECC (reviewers par langage, build resolvers, planner…), installables dans `.claude/agents/` |
 | `references/ecc-extras/commands/` | Slash commands ECC, installables dans `.claude/commands/` |
 | `references/ecc-extras/rules/` | Règles de codage ECC par langage |
+| `references/sites.md` | Sites web mis de côté (génération vidéo, multi-LLM, modèles de code, OSINT…) avec description et mises en garde |
 
 ## Skills : humanizer
 

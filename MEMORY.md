@@ -21,6 +21,8 @@ Règles d'écriture : une ligne par entrée, datée (AAAA-MM-JJ), en français ;
 - 2026-10-31 — Kit UI du prochain site web : taste-skill, ui-ux-pro-max, huashu-design, impeccable, playwright-cli (+ frontend-design, design-extract en option). À installer dans le dépôt du site au démarrage du projet. Détails dans `README.md`, section « Kit UI ».
 - 2026-10-31 — Conflits connus : ne pas installer Aegis et Superpowers ensemble ; un seul des deux Firecrawl (`firecrawl` ou `firecrawl-claude-plugin`) ; une seule variante de `youtube-skills` (`youtube-full`) ; le `caveman` de la réserve fait doublon avec le `caveman:caveman` déjà disponible.
 
+- 2026-10-31 — Les sites web à garder (pas des skills) vont dans `references/sites.md`, avec une description et les mises en garde.
+
 ## En suspens
 
 - 2026-10-31 — Installation locale de context7 et claude-mem : script prêt (`local/install-local.sh`), à lancer par l'utilisateur sur son ordinateur.

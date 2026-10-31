@@ -4,6 +4,7 @@ Réserve personnelle de skills Claude Code et de ressources de référence. **Ri
 
 Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 
+- [`A-FAIRE.md`](A-FAIRE.md) : **les actions que l'utilisateur doit faire lui-même** (clés, dépôts, réglages, scripts), tenu à jour par Claude.
 - [`MEMORY.md`](MEMORY.md) : mémoire de travail (préférences, décisions, tâches en suspens), lue et tenue à jour par Claude à chaque session.
 - [`templates/veille-youtube/`](templates/veille-youtube) : modèle prêt du dépôt de veille YouTube (skill `/watch` en moteur Gemini, agents `veille` et `analyse`, `sources.md`).
 - [`references/sites.md`](references/sites.md) : sites web mis de côté (services en ligne, pas des skills).

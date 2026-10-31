@@ -23,10 +23,9 @@ Règles d'écriture : une ligne par entrée, datée (AAAA-MM-JJ), en français ;
 - 2026-10-31 — Conflits connus : ne pas installer Aegis et Superpowers ensemble ; un seul des deux Firecrawl (`firecrawl` ou `firecrawl-claude-plugin`) ; une seule variante de `youtube-skills` (`youtube-full`) ; le `caveman` de la réserve fait doublon avec le `caveman:caveman` déjà disponible.
 - 2026-10-31 — Installés en local (Windows, portée utilisateur), confirmés par l'utilisateur : context7 et les 5 skills du guide « Claude autonome » : find-skills, superpowers, claude-mem, impeccable, task-observer (script `local/install-5-skills.ps1`). Superpowers est choisi, donc ne pas installer Aegis.
 - 2026-10-31 — Veille YouTube : dépôt **dédié** `veille-youtube` (skill `/watch` en moteur Gemini + agents `veille` et `analyse`). Analyses rangées dans ce dépôt.
+- 2026-10-31 — Les actions manuelles de l'utilisateur vont dans `A-FAIRE.md` (ajoutées quand Claude les demande, supprimées quand elles sont faites).
 - 2026-10-31 — Les sites web à garder (pas des skills) vont dans `references/sites.md`, avec une description et les mises en garde.
 
 ## En suspens
 
-- 2026-10-31 — Veille YouTube : dépôt `joachimvc42/veille-youtube` créé et installé, `www.youtube.com` autorisé, `GEMINI_API_KEY` ajoutée par l'utilisateur (prise en compte dans une **nouvelle** session). À faire dans la prochaine session avec ce dépôt attaché : tester l'agent `analyse` sur une vidéo, puis faire une première passe de veille ; compléter `sources.md` avec les chaînes de l'utilisateur.
-- 2026-10-31 — Dépôt `skill-reserve` public : l'utilisateur peut le passer en privé (il contient notamment `Apple_HIG.pdf`, © Apple).
-- 2026-10-31 — Remotion : licence payante pour les entreprises de plus de 3 personnes. À vérifier avant un usage professionnel.
+- 2026-10-31 — Veille YouTube : dépôt installé, `www.youtube.com` autorisé, mais `GEMINI_API_KEY` **absente** de la session suivante (voir `A-FAIRE.md`). Dès que la clé est visible : tester l'agent `analyse` sur une vidéo, puis faire une première passe de veille.

@@ -717,6 +717,20 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/rea/.agents/skills/rea-tool-design` | Investigate, design, or change REA investigation tools, CLI/MCP contracts, provider capabilities, and Evidence semantics. |
 | `skills/rea/.agents/skills/reverse-engineer-anything` | Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA, and build agent environments (AgentEnv bundles) of web applications from a live instance or a capture. Use shipp… |
 
+## Skills : higgsfield
+
+| Skill | Description |
+|---|---|
+| `skills/higgsfield/higgsfield-brandkit` | Create and extend complete visual brand systems through the Higgsfield CLI and bundled deterministic local tooling: palettes, SVG logo marks, typography, mockups, social graphics, packaging, signage, merchandise, post… |
+| `skills/higgsfield/higgsfield-faceless-video` | Create a finished faceless explainer, documentary, illustrated story or children's music video, or edit a previously created faceless video. Use when: "make a faceless video", "create a narrated explainer", "make a ch… |
+| `skills/higgsfield/higgsfield-generate` | Generate images/videos/3D assets/audio via Higgsfield AI. Defaults: GPT Image 2.5 for image/design/text, Seedance 2.5 for video, Nano Banana 2 for cartoon characters, Marketing Studio for ads, Seed Audio 1.0 for audio… |
+| `skills/higgsfield/higgsfield-marketplace-cards` | Generate marketplace product image cards through Higgsfield: compliant main image, secondary product images, and A+ style content modules. Use when the user asks for marketplace listing images, product detail cards, s… |
+| `skills/higgsfield/higgsfield-product-photoshoot` | Generate brand-quality product images through Higgsfield product-photoshoot prompt enhancement on GPT Image 2 / gpt_image_2. Entry point for professional brand/product visuals. Use when: "product photo", "studio shot"… |
+| `skills/higgsfield/higgsfield-soul-id` | Train a Soul Character — a personalized model on a person's face that Higgsfield uses for identity-faithful image and video generation. Use when: "create my Soul", "train my face", "make my digital twin", "build me an… |
+| `skills/higgsfield/higgsfield-video-explainer` | Compatibility entry for the former video explainer skill. Use when: the user explicitly invokes higgsfield-video-explainer or continues its existing workflow. NOT for: new generic explainer requests, ads, single clips… |
+| `skills/higgsfield/higgsfield-websites` | Build, edit, and deploy full-stack websites, apps and games via the Higgsfield CLI (`higgsfield website …`). Each is a React 19 + TanStack Start SSR app in one Cloudflare Worker (D1/R2/KV/DO/Containers). THREE product… |
+| `skills/higgsfield/higgsfield-youtube-thumbnail` | Create high-click-through YouTube thumbnails and vertical video covers through the Higgsfield CLI. Builds a truthful information-gap concept, preserves up to three referenced identities, supports logos and controlled … |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

@@ -1,4 +1,4 @@
-# Installe sur TON ordinateur Windows les « 5 skills qui rendent Claude autonome » (guide 0xloucash) :
+﻿# Installe sur TON ordinateur Windows les « 5 skills qui rendent Claude autonome » (guide 0xloucash) :
 #   1. find-skills    (vercel-labs/skills)                    : trouve et installe d'autres skills
 #   2. superpowers    (obra/superpowers)                      : planifier puis vérifier avant de livrer
 #   3. claude-mem     (thedotmack/claude-mem)                 : mémoire entre les sessions (mode local, sans compte)
@@ -12,7 +12,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\local\install-5-skills.ps1 superpowers   (un seul)
 param([string]$Only = "")
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"   # les erreurs des commandes natives sont testées via $LASTEXITCODE
 $SkillsCliVersion  = "1.7.4"
 $ImpeccableVersion = "4.8.0"
 
@@ -23,11 +23,15 @@ $env:DISABLE_TELEMETRY = "1"
 function Want([string]$Name) { return ($Only -eq "") -or ($Only -eq $Name) }
 function Need([string]$Cmd) {
   if (-not (Get-Command $Cmd -ErrorAction SilentlyContinue)) {
-    Write-Error "'$Cmd' introuvable. Installe-le puis relance le script."
+    Write-Host "Erreur : '$Cmd' introuvable. Installe-le puis relance le script." -ForegroundColor Red
+    exit 1
   }
 }
 function Check([string]$Step) {
-  if ($LASTEXITCODE -ne 0) { Write-Error "Échec à l'étape : $Step (code $LASTEXITCODE)." }
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Échec à l'étape : $Step (code $LASTEXITCODE)." -ForegroundColor Red
+    exit $LASTEXITCODE
+  }
 }
 
 Need claude
@@ -44,7 +48,7 @@ if (Want "find-skills") {
 if (Want "superpowers") {
   Write-Host "==> 2/5 superpowers (plugin officiel)"
   # La marketplace officielle est normalement déjà connue ; on l'ajoute au cas où, sans échouer si elle existe.
-  claude plugin marketplace add anthropics/claude-plugins-official 2>$null
+  cmd /c "claude plugin marketplace add anthropics/claude-plugins-official >nul 2>&1"
   claude plugin install superpowers@claude-plugins-official --scope user
   Check "superpowers"
 }

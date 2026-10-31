@@ -1,4 +1,4 @@
-# Installe sur TON ordinateur Windows (pas dans le cloud) les outils retenus pour toutes les sessions locales :
+﻿# Installe sur TON ordinateur Windows (pas dans le cloud) les outils retenus pour toutes les sessions locales :
 #   1. context7   : documentation à jour des bibliothèques, en serveur MCP (portée utilisateur)
 #   2. claude-mem : mémoire long terme entre sessions, en mode 100 % local, sans compte ni télémétrie
 #
@@ -9,13 +9,14 @@
 #   powershell -ExecutionPolicy Bypass -File .\local\install-local.ps1 claude-mem
 param([string]$Only = "")
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"   # les erreurs des commandes natives sont testées via $LASTEXITCODE
 $ClaudeMemVersion = "15.7.0"   # version analysée dans la réserve (skills/claude-mem)
 
 function Want([string]$Name) { return ($Only -eq "") -or ($Only -eq $Name) }
 function Need([string]$Cmd) {
   if (-not (Get-Command $Cmd -ErrorAction SilentlyContinue)) {
-    Write-Error "'$Cmd' introuvable. Installe-le puis relance le script."
+    Write-Host "Erreur : '$Cmd' introuvable. Installe-le puis relance le script." -ForegroundColor Red
+    exit 1
   }
 }
 
@@ -25,7 +26,7 @@ Need npx
 
 if (Want "context7") {
   Write-Host "==> context7 (MCP hébergé par Upstash, portée utilisateur)"
-  claude mcp get context7 *> $null
+  cmd /c "claude mcp get context7 >nul 2>&1"
   if ($LASTEXITCODE -eq 0) {
     Write-Host "    déjà configuré, rien à faire"
   } elseif ($env:CONTEXT7_API_KEY) {

@@ -6,7 +6,8 @@ Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 
 - [`MEMORY.md`](MEMORY.md) : mémoire de travail (préférences, décisions, tâches en suspens), lue et tenue à jour par Claude à chaque session.
 - [`references/sites.md`](references/sites.md) : sites web mis de côté (services en ligne, pas des skills).
-- [`local/install-local.sh`](local/install-local.sh) : installe sur l'ordinateur de l'utilisateur les outils retenus pour toutes les sessions locales (context7 et claude-mem en mode local, sans compte ni télémétrie).
+- [`local/install-local.ps1`](local/install-local.ps1) (Windows/PowerShell) et [`local/install-local.sh`](local/install-local.sh) (Mac/Linux) : installent sur l'ordinateur de l'utilisateur context7 et claude-mem en mode local, sans compte ni télémétrie.
+- [`local/install-5-skills.ps1`](local/install-5-skills.ps1) (Windows) : installe pour l'utilisateur les « 5 skills qui rendent Claude autonome » (find-skills, superpowers, claude-mem, impeccable, task-observer), avec versions figées et télémétrie coupée.
 
 ## Contenu
 

@@ -18,6 +18,13 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 |---|---|
 | `skills/humanizer` | Rewrite AI-sounding text so it reads like the writer without changing what it says. Use when editing or reviewing prose for AI tells: not-X-but-Y contrasts, one-line closers, staged openers, forced triads, dashes ever… |
 
+## Skills : tutor-skills
+
+| Skill | Description |
+|---|---|
+| `skills/tutor-skills/skills/tutor` | Interactive quiz tutor for Obsidian StudyVault learning. Use when the user wants to: (1) Take a diagnostic assessment of their knowledge, (2) Study or review specific sections/topics, (3) Drill weak areas identified i… |
+| `skills/tutor-skills/skills/tutor-setup` | Transforms knowledge sources into an Obsidian StudyVault. Two modes: (1) Document Mode — PDF/text/web sources → study notes with practice questions. (2) Codebase Mode — source code project → onboarding vault for new d… |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

@@ -24,7 +24,6 @@ Règles d'écriture : une ligne par entrée, datée (AAAA-MM-JJ), en français ;
 
 ## En suspens
 
-- 2026-10-31 — Guides 0xloucash (`references/sites.md`) non lus : ajouter `guides.0xloucash.xyz` aux domaines autorisés, puis les lire. En priorité « 5 skills Claude autonome » pour en tirer d'éventuels dépôts à ajouter à la réserve.
 - 2026-10-31 — Installation locale de context7 et claude-mem : script prêt (`local/install-local.sh`), à lancer par l'utilisateur sur son ordinateur.
 - 2026-10-31 — Dépôt `skill-reserve` public : l'utilisateur peut le passer en privé (il contient notamment `Apple_HIG.pdf`, © Apple).
 - 2026-10-31 — Remotion : licence payante pour les entreprises de plus de 3 personnes. À vérifier avant un usage professionnel.

@@ -695,6 +695,28 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 |---|---|
 | `skills/ralph-claude-code` | (pas de SKILL.md : outil CLI, voir README.md du dossier et le README de la réserve) |
 
+## Skills : skills-cli
+
+| Skill | Description |
+|---|---|
+| `skills/skills-cli/skills/find-skills` | Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities. This skill should be use… |
+
+## Skills : task-observer
+
+| Skill | Description |
+|---|---|
+| `skills/task-observer` | Monitors task execution for skill improvement opportunities: logs patterns, user corrections and methodology worth preserving to the workspace, turns them into skill updates in a weekly review, and flags repeating wor… |
+
+## Skills : rea
+
+| Skill | Description |
+|---|---|
+| `skills/rea/.agents/skills/rea-analysis-optimization` | Optimize REA providers and shared analysis workflows for agent context, latency, CPU, and memory while preserving correctness and Evidence. Use for analysis bottlenecks and cache or query design; CI/test-suite optimiz… |
+| `skills/rea/.agents/skills/rea-changelog-update` | Prepare or rewrite REA release changelogs and GitHub release notes from pinned Git history, with verified contributor thanks and Release Please synchronization. |
+| `skills/rea/.agents/skills/rea-ci-tests-audit` | Audit REA CI and test suites for correctness, fixture drift, false passes, and measured performance; use for suite or workflow investigations and efficiency changes, rather than ordinary feature testing or a single te… |
+| `skills/rea/.agents/skills/rea-tool-design` | Investigate, design, or change REA investigation tools, CLI/MCP contracts, provider capabilities, and Evidence semantics. |
+| `skills/rea/.agents/skills/reverse-engineer-anything` | Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA, and build agent environments (AgentEnv bundles) of web applications from a live instance or a capture. Use shipp… |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

@@ -373,6 +373,225 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 |---|---|
 | `skills/codeburn/plugins/codeburn/skills/cost` | Show what AI coding tools cost today, from CodeBurn. Use when the user asks about today's AI spend or token use, or which model or project cost the most. |
 
+## Skills : open-design
+
+| Skill | Description |
+|---|---|
+| `skills/open-design/skills/8-bit-orbit-video-template` | Hyperframes-based video template for retro pixel deck motion design. Use when users want a high-fidelity, multi-scene HTML-to-video composition with advanced transitions, interactive preview controls, and ready-to-ren… |
+| `skills/open-design/skills/ad-creative` | Generate and iterate ad creative including headlines, descriptions, and primary text. Useful for paid social and search ad iteration. |
+| `skills/open-design/skills/after-hours-editorial-template` | Luxury dark-editorial HyperFrames template for three-page cinematic storyboards, inspired by haute couture title cards and magazine chapter spreads. Use when the user asks for premium fashion-style motion pages, moody… |
+| `skills/open-design/skills/agent-browser` | Browser automation CLI for AI agents. Use when the user needs to inspect, test, or automate browser behavior: navigating pages, filling forms, clicking buttons, taking screenshots, extracting page data, reading select… |
+| `skills/open-design/skills/ai-music-album` | Full-lifecycle AI music album production — concept, lyric drafting, track sequencing, and export. Useful for indie album experiments and brand soundtracks. |
+| `skills/open-design/skills/algorithmic-art` | Create generative art using p5.js with seeded randomness so every render is reproducible. Useful for procedural posters, motion-style stills, and artistic frame studies. |
+| `skills/open-design/skills/animate` | Implement purposeful interface animations: easing, springs, interruption, exits, and reduced motion. Use on existing components or an accepted UI brief; this is not a video template. |
+| `skills/open-design/skills/apple-hig` | Apple Human Interface Guidelines as 14 agent skills covering platforms, foundations, components, patterns, inputs, and technologies for iOS, macOS, visionOS, watchOS, and tvOS. |
+| `skills/open-design/skills/article-magazine` | Huashu / huashu-md-html-inspired magazine article layout for turning Markdown or notes into a polished long-form HTML essay. |
+| `skills/open-design/skills/artifacts-builder` | Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). |
+| `skills/open-design/skills/brainstorming` | Transform rough ideas into fully-formed designs through structured questioning and alternative exploration. Useful early in concept work. |
+| `skills/open-design/skills/brand-extract` | Extract a complete Brand Kit from a live website by driving the in-app browser. Use when a brand-extraction project opens with a site in the Browser tab, or when the user asks to "extract a brand", "pull the brand fro… |
+| `skills/open-design/skills/brand-guidelines` | Apply Anthropic's official brand colors and typography to artifacts for consistent visual identity and professional design standards. A reference for shaping your own. |
+| `skills/open-design/skills/brandkit` | Premium brand-kit image generation skill for creating high-end brand-guidelines boards, logo systems, identity decks, and visual-world presentations. Trained for minimalist, cinematic, editorial, dark-tech, luxury, cu… |
+| `skills/open-design/skills/brutalist-skill` | Raw mechanical interfaces fusing Swiss typographic print with military terminal aesthetics. Rigid grids, extreme type scale contrast, utilitarian color, analog degradation effects. For data-heavy dashboards, portfolio… |
+| `skills/open-design/skills/canvas-design` | Create beautiful visual art in PNG and PDF documents using design philosophy and aesthetic principles for posters, illustrations, and static pieces. |
+| `skills/open-design/skills/card-twitter` | Twitter quote or data card designed to pair with a post. |
+| `skills/open-design/skills/card-xiaohongshu` | Xiaohongshu-style knowledge cards, arranged as a swipeable multi-card carousel. |
+| `skills/open-design/skills/chat-motion-overlay` | Generate configurable chat motion overlays from a transcript or screenshot, including plain bubble scenes, app-style chat containers, optional device frames, preset or uploaded avatars, nickname display rules, and tra… |
+| `skills/open-design/skills/color-expert` | Color science expert skill with 286K words of reference material covering OKLCH/OKLAB, palette generation, accessibility/contrast, color naming, pigment mixing, and historical color theory. |
+| `skills/open-design/skills/competitive-ads-extractor` | Extract and analyze competitors' ads from ad libraries to understand messaging and creative approaches that resonate. |
+| `skills/open-design/skills/copywriting` | Write and rewrite marketing copy for landing pages, homepages, and ads. Useful as a copy chief partner during launches. |
+| `skills/open-design/skills/creative-director` | AI creative director with recursive self-assessment: 20+ methodologies (SIT, TRIZ, Bisociation, SCAMPER, Synectics), 3-axis evaluation calibrated against Cannes/D&AD/HumanKind, 5-phase process from brief to presentation. |
+| `skills/open-design/skills/d3-visualization` | Teaches the agent to produce D3 charts and interactive data visualizations. A comprehensive D3.js skill with examples across chart types and techniques giving the agent expert-level knowledge to generate complex, inte… |
+| `skills/open-design/skills/data-report` | Turns CSV, Excel, or JSON data into a polished visual report page. |
+| `skills/open-design/skills/deck-guizang-editorial` | Editorial magazine meets e-ink: 10 layouts and 5 palettes (Ink, Indigo Porcelain, Forest Ink, Kraft Paper, Dune). |
+| `skills/open-design/skills/deck-open-slide-canvas` | Locked 1920x1080 canvas deck with React component-level free composition, not bound to a fixed template. |
+| `skills/open-design/skills/deck-swiss-international` | 16-column grid, one saturated accent, and 22 locked layouts (Klein Blue, Lemon, Mint, Safety Orange). |
+| `skills/open-design/skills/design-brief` | Parse a structured design brief written in I-Lang protocol format into a concrete design spec. Eliminates ambiguity from vague requests like "make it professional" by requiring explicit dimensions: palette, typography… |
+| `skills/open-design/skills/design-consultation` | Build a complete design system from scratch with creative risks and realistic product mockups. Useful for kickoff workshops and brand-from-zero work. |
+| `skills/open-design/skills/design-md` | Create and manage DESIGN.md files. Useful for capturing design direction, tokens, and visual rules in a single source of truth. |
+| `skills/open-design/skills/design-review` | Designer Who Codes: visual audit then fixes with atomic commits and before/after screenshots. Useful for tightening shipped UI before launch. |
+| `skills/open-design/skills/digits-fintech-swiss-template` | Swiss-grid fintech deck template in black / warm paper / neon-lime contrast. Use when users ask for premium data-story slides with strict modular layout, bold numeric cards, restrained motion, and keyboard/click navig… |
+| `skills/open-design/skills/doc` | Read, create, and edit .docx documents with formatting and layout fidelity via OpenAI's document skill. |
+| `skills/open-design/skills/doc-kami-parchment` | Warm parchment canvas (#f5f4ed), monochrome ink-blue accent (#1B365D), one serif family, and editorial-grade typography. |
+| `skills/open-design/skills/docx` | Create, edit, and analyze Word documents with tracked changes, comments, and formatting. Useful for design briefs, copy docs, and review-ready deliverables. |
+| `skills/open-design/skills/domain-name-brainstormer` | Generate creative domain name ideas and check availability across multiple TLDs including .com, .io, .dev, and .ai. |
+| `skills/open-design/skills/ecommerce-image-workflow` | Reference-product ecommerce image workflow for generating a compact set of product-faithful main, feature, and lifestyle images from real product reference photos. V1 requires uploaded product imagery and intentionall… |
+| `skills/open-design/skills/editorial-burgundy-principles-template` | Editorial studio deck template in burgundy / blush / muted-gold palette. Use when users ask for premium manifesto or culture slides with pill tags, large typographic statements, principle cards, and guided keyboard/cl… |
+| `skills/open-design/skills/emil-design-eng` | This skill encodes Emil Kowalski's philosophy on UI polish, component design, animation decisions, and the invisible details that make software feel great. |
+| `skills/open-design/skills/emilkowalski-motion` | Motion-design follow-up skill inspired by Emil Kowalski's animation guidance. Use after an interface exists to add tasteful micro-interactions, state transitions, and page motion with product-grade restraint. |
+| `skills/open-design/skills/enhance-prompt` | Improve prompts with design specs and UI/UX vocabulary. Useful for design-to-code workflows and clarifying requests for visual output. |
+| `skills/open-design/skills/export-download-debugging` | Diagnose and fix browser, preview, or Electron export/download failures, especially image export issues involving Save As, Blob/Data URLs, the File System Access API, createWritable failures, and 0 KB files. |
+| `skills/open-design/skills/fal-3d` | Generate 3D models from text or images via fal.ai. Useful for game assets, AR previews, product mockups, and concept sculpting. |
+| `skills/open-design/skills/fal-generate` | Generate images and videos using fal.ai AI models. Production-grade catalogue covering Flux, SDXL, ideogram, and other community-hosted endpoints. |
+| `skills/open-design/skills/fal-image-edit` | AI-powered image editing with style transfer, background removal, object removal, and inpainting via fal.ai hosted models. |
+| `skills/open-design/skills/fal-kling-o3` | Generate images and videos with Kling O3 — Kling's most powerful model family — via fal.ai. |
+| `skills/open-design/skills/fal-lip-sync` | Create talking head videos and lip sync audio to video via fal.ai. Useful for explainer avatars, multilingual dubbing previews, and social cuts. |
+| `skills/open-design/skills/fal-realtime` | Real-time and streaming AI image generation via fal.ai. Suited for moodboard exploration, draft variations, and rapid creative iteration. |
+| `skills/open-design/skills/fal-restore` | Restore and fix image quality — deblur, denoise, fix faces, and restore old documents using fal.ai's hosted restoration models. |
+| `skills/open-design/skills/fal-train` | Train custom AI models (LoRA) on fal.ai for personalized image generation tailored to a brand, character, or style. |
+| `skills/open-design/skills/fal-tryon` | Virtual try-on — see how clothes look on a person via fal.ai's hosted try-on models. Useful for ecommerce, lookbooks, and styling experiments. |
+| `skills/open-design/skills/fal-upscale` | Upscale and enhance image and video resolution using AI super-resolution models hosted on fal.ai. |
+| `skills/open-design/skills/fal-video-edit` | Edit existing videos using AI — remix style, upscale, remove background, and add audio via fal.ai's hosted video models. |
+| `skills/open-design/skills/fal-vision` | Analyze images — segment objects, detect, run OCR, describe, and answer visual questions via fal.ai vision models. |
+| `skills/open-design/skills/faq-page` | A Frequently Asked Questions (FAQ) page with collapsible accordion sections, search functionality, and category filtering. Use when the brief asks for "FAQ", "help center", "questions", or "support page". |
+| `skills/open-design/skills/field-notes-editorial-template` | Editorial "Field Notes" report template with soft paper background, serif hero typography, rounded pastel insight cards, and a retention chart panel. Use when users ask for a premium magazine-style business report, bo… |
+| `skills/open-design/skills/figma-code-connect-components` | Connect Figma design components to code components using Code Connect so design-system updates flow into the codebase automatically. |
+| `skills/open-design/skills/figma-create-design-system-rules` | Generate project-specific design system rules for Figma-to-code workflows. Useful for capturing tokens, naming, and lint rules in one source. |
+| `skills/open-design/skills/figma-create-new-file` | Create a new blank Figma Design or FigJam file. Useful as the first step in scripted design-system or workshop workflows. |
+| `skills/open-design/skills/figma-generate-design` | Build or update screens in Figma from code or description using design system components. Translate app pages into Figma using design tokens. |
+| `skills/open-design/skills/figma-generate-library` | Build or update a professional-grade design system library in Figma from a codebase. Useful for keeping the Figma source of truth in sync with shipped components. |
+| `skills/open-design/skills/figma-implement-design` | Translate Figma designs into production-ready code with 1:1 visual fidelity. Useful for handing off Figma frames straight to a frontend agent. |
+| `skills/open-design/skills/figma-use` | Run Figma Plugin API scripts for canvas writes, inspections, variables, and design-system work. Prerequisite for every other Figma skill in this catalogue. |
+| `skills/open-design/skills/flutter-animating-apps` | Implement animated effects, transitions, and motion in Flutter apps. Useful for native iOS/Android motion design. |
+| `skills/open-design/skills/frame-data-chart-nyt` | NYT-newsroom typography, staggered reveal animation, and editorial-grade charts (line, bar, or range band). |
+| `skills/open-design/skills/frame-flowchart-sticky` | SVG curve connectors, sticky-note nodes, and cursor interaction with a whiteboard-brainstorm feel. |
+| `skills/open-design/skills/frame-glitch-title` | Digital glitch, chromatic offset, and data-corruption title frame for video transitions or cyberpunk heroes. |
+| `skills/open-design/skills/frame-light-leak-cinema` | Film light leaks, grain, 16:9 letterbox, and large serif type for cinematic openings or chapter cards. |
+| `skills/open-design/skills/frame-liquid-bg-hero` | WebGL-style fluid displacement background with a quote overlay, suited to video intros, landing heroes, or posters. |
+| `skills/open-design/skills/frame-logo-outro` | Segmented logo assembly, glow bloom, and tagline reveal for video outros or brand closing frames. |
+| `skills/open-design/skills/frame-macos-notification` | Realistic macOS notification banner with app icon, title, and body, suited to video overlays or product teasers. |
+| `skills/open-design/skills/frontend-design` | Create distinctive, production-grade frontend interfaces with strong visual direction, polished typography, considered layout, and working HTML/CSS/JS or framework code. Use for websites, landing pages, dashboards, Re… |
+| `skills/open-design/skills/frontend-dev` | Full-stack frontend with cinematic animations, AI-generated media via MiniMax API, and generative art. Useful for hero pages and showcase sites. |
+| `skills/open-design/skills/frontend-skill` | Create visually strong landing pages, websites, and app UIs with restrained composition. OpenAI's production frontend playbook. |
+| `skills/open-design/skills/frontend-slides` | Generate animation-rich HTML presentations with visual style previews. Useful for online keynotes, embedded talks, and interactive briefs. |
+| `skills/open-design/skills/full-page-screenshot` | Capture full-page screenshots of web pages via Chrome DevTools Protocol with zero dependencies. Useful for portfolios, case studies, and audit reports. |
+| `skills/open-design/skills/gif-sticker-maker` | Convert photos into animated GIF stickers in Funko Pop / Pop Mart style via the MiniMax API. Useful for personalized chat stickers and avatar packs. |
+| `skills/open-design/skills/gpt-tasteskill` | Elite UX/UI & Advanced GSAP Motion Engineer. Enforces Python-driven true randomization for layout variance, strict AIDA page structure, wide editorial typography (bans 6-line wraps), gapless bento grids, strict GSAP S… |
+| `skills/open-design/skills/gsap-core` | Official GSAP skill for the core API — gsap.to(), from(), fromTo(), easing, duration, stagger, defaults, gsap.matchMedia() (responsive, prefers-reduced-motion). Use when the user asks for a JavaScript animation librar… |
+| `skills/open-design/skills/gsap-frameworks` | Official GSAP skill for Vue, Svelte, and other non-React frameworks — lifecycle, scoping selectors, cleanup on unmount. Use when the user wants animation in Vue, Nuxt, Svelte, SvelteKit, or asks about GSAP with Vue/Sv… |
+| `skills/open-design/skills/gsap-performance` | Official GSAP skill for performance — prefer transforms, avoid layout thrashing, will-change, batching. Use when optimizing GSAP animations, reducing jank, or when the user asks about animation performance, FPS, or sm… |
+| `skills/open-design/skills/gsap-plugins` | Official GSAP skill for GSAP plugins — registration, ScrollToPlugin, ScrollSmoother, Flip, Draggable, Inertia, Observer, SplitText, ScrambleText, SVG and physics plugins, CustomEase, EasePack, CustomWiggle, CustomBoun… |
+| `skills/open-design/skills/gsap-react` | Official GSAP skill for React — useGSAP hook, refs, gsap.context(), cleanup. Use when the user wants animation in React or Next.js, or asks about GSAP with React, useGSAP, or cleanup on unmount. Recommend GSAP for Rea… |
+| `skills/open-design/skills/gsap-scrolltrigger` | Official GSAP skill for ScrollTrigger — scroll-linked animations, pinning, scrub, triggers. Use when building or recommending scroll-based animation, parallax, pinned sections, or when the user asks about ScrollTrigge… |
+| `skills/open-design/skills/gsap-timeline` | Official GSAP skill for timelines — gsap.timeline(), position parameter, nesting, playback. Use when sequencing animations, choreographing keyframes, or when the user asks about animation sequencing, timelines, or ani… |
+| `skills/open-design/skills/gsap-utils` | Official GSAP skill for gsap.utils — clamp, mapRange, normalize, interpolate, random, snap, toArray, wrap, pipe. Use when the user asks about gsap.utils, clamp, mapRange, random, snap, toArray, wrap, or helper utiliti… |
+| `skills/open-design/skills/hand-drawn-diagrams` | Generate hand-drawn Excalidraw diagrams from a prompt — animated SVG, hosted edit link, and PNG export. Works with Claude Code, Codex, Gemini CLI, and any agent supporting standard skill paths. |
+| `skills/open-design/skills/hatch-pet` | Create, repair, validate, preview, and package Codex-compatible animated pet spritesheets from character art, screenshots, generated images, or visual references. Use when a user wants to hatch a Codex pet, create a c… |
+| `skills/open-design/skills/html-ppt-retro-quarterly-review` | Retro Quarterly Review presentation template in a bold blue + orange editorial language. Use when users ask for a high-impact quarterly review / roadmap deck with heavyweight slab headlines, clean cream paper sections… |
+| `skills/open-design/skills/huashu-art-motion` | 辅助艺术动画与解说任务：35 种艺术风格配方、9 种解说语法、分镜与确定性 Canvas 绘制工具。按宿主时间轴实现，素材与导出使用宿主能力。 |
+| `skills/open-design/skills/image-enhancer` | Improve image and screenshot quality by enhancing resolution, sharpness, and clarity for professional presentations and documentation. |
+| `skills/open-design/skills/image-to-code-skill` | Elite website image-to-code skill for Codex. For visually important web tasks, it must first generate the design image(s) itself, deeply analyze them, then implement the website to match them as closely as possible. I… |
+| `skills/open-design/skills/imagegen` | Generate and edit images using OpenAI's Image API for project assets — UI mockups, icons, illustrations, social cards, and visual references. |
+| `skills/open-design/skills/imagegen-frontend-mobile` | Elite mobile app image-generation skill for creating premium, app-native screen concepts and flows. Designed for iOS, Android, and cross-platform mobile products. Prioritizes clean hierarchy, comfortably readable text… |
+| `skills/open-design/skills/imagegen-frontend-web` | Elite frontend image-direction skill for generating premium, conversion-aware website design references. CRITICAL OUTPUT RULE — generate ONE separate horizontal image FOR EVERY section. A landing page with 8 sections … |
+| `skills/open-design/skills/imagen` | Generate images using Google Gemini's image generation API for UI mockups, icons, illustrations, and visual assets. |
+| `skills/open-design/skills/impeccable-design-polish` | Follow-up design polish skill inspired by Impeccable. Use after a web or HTML artifact exists to audit, critique, polish, animate, harden, and prepare the page for a live/share pass. |
+| `skills/open-design/skills/library-curator` | Search the OD Library (the global asset registry) and apply matching assets into the current project mid-task. Use when the user asks to reuse an image they captured/uploaded earlier, "pull a logo/screenshot from my l… |
+| `skills/open-design/skills/login-flow` | Mobile login and authentication flow screens |
+| `skills/open-design/skills/marketing-psychology` | Apply psychological principles and behavioral science to copy and design. Useful for tightening hooks, framing, and pricing presentation. |
+| `skills/open-design/skills/minimalist-skill` | Clean editorial-style interfaces. Warm monochrome palette, typographic contrast, flat bento grids, muted pastels. No gradients, no heavy shadows. |
+| `skills/open-design/skills/minimax-docx` | Professional DOCX document creation and editing using OpenXML SDK. Useful for branded reports, polished proposals, and template-based authoring. |
+| `skills/open-design/skills/minimax-pdf` | Generate, fill, and reformat PDFs with a token-based design system and 15 cover styles. Useful for branded PDFs, e-guides, and reports. |
+| `skills/open-design/skills/mockup-device-3d` | Static iPhone and MacBook 3D-style showcase with real HTML embedded on screens, glass-lens refraction, and 360-degree turntable composition. |
+| `skills/open-design/skills/motion-design` | Apply motion craft to an active task: refine a brief, beat map, visual continuity, typography, pacing, and timeline implementation. Use when planning or improving motion graphics; the host task owns artifact creation,… |
+| `skills/open-design/skills/motion-lab` | 为当前网页或组件查找、选型和改造动效。包含 160 个案例的 HTML/CSS/JS、参数与中英文索引，覆盖基础、文字、交互和高级动效。 |
+| `skills/open-design/skills/nanobanana-ppt` | AI-powered PPT generation with document analysis and styled images via the NanoBanana stack. Combines image generation with structured deck output. |
+| `skills/open-design/skills/od-next-media-inputs` | Prepare required media inputs within an existing OD Next plan. Reuse capability evidence, acquire and measure assets efficiently, and resolve asynchronous jobs without removing required content or weakening quality st… |
+| `skills/open-design/skills/oil-motion` | 处理视频和序列帧，编译滚动、指针、拖动与状态驱动的网页动效；内含本地媒体处理脚本和运行时。新素材生成使用宿主工具。 |
+| `skills/open-design/skills/output-skill` | Overrides default LLM truncation behavior. Enforces complete code generation, bans placeholder patterns, and handles token-limit splits cleanly. Apply to any task requiring exhaustive, unabridged output. |
+| `skills/open-design/skills/paywall-upgrade-cro` | Design and optimize upgrade screens, paywalls, and upsell modals. Useful for SaaS conversion design and pricing-page experiments. |
+| `skills/open-design/skills/pdf` | Extract text, create PDFs, and handle forms. Useful for press releases, branded one-pagers, and printable design deliverables. |
+| `skills/open-design/skills/pixelbin-media` | Generate and edit images and videos with an 85+ API portfolio and build visually appealing website pages via Pixelbin. |
+| `skills/open-design/skills/plan-design-review` | Senior Designer review: rates each design dimension 0-10, explains what a 10 looks like, and flags AI Slop signals. Useful as a gate before merging UI work. |
+| `skills/open-design/skills/platform-design` | 300+ design rules from Apple HIG, Material Design 3, and WCAG 2.2 for cross-platform apps. Useful when shipping a single design across iOS, Android, and the web. |
+| `skills/open-design/skills/poster-hero` | Vertical poster or Moments-style share image with strong visual impact. |
+| `skills/open-design/skills/ppt-keynote` | Apple Keynote-quality slides, one card per screen, with keyboard left/right navigation. |
+| `skills/open-design/skills/pptx` | Read, generate, and adjust PowerPoint slides, layouts, and templates. Useful for executive decks, training material, and product reviews. |
+| `skills/open-design/skills/pptx-generator` | Create and edit PowerPoint presentations from scratch with PptxGenJS — MiniMax's production-tested deck pipeline. |
+| `skills/open-design/skills/pptx-html-fidelity-audit` | Audit a python-pptx export against its source HTML deck, identify layout/content drift (footer overflow, cropped content, missing italic/em, lost styling, off-rhythm spacing), and re-export with strict footer-rail + c… |
+| `skills/open-design/skills/pr-feedback-quality-gate` | Safely track pull request feedback, resolve review comments or merge conflicts, validate fixes, and use a read-only cross-review before committing or pushing follow-up changes. |
+| `skills/open-design/skills/redesign-skill` | Upgrades existing websites and apps to premium quality. Audits current design, identifies generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framework or vani… |
+| `skills/open-design/skills/reference-design-contract` | Turn vague taste, screenshots, URLs, product notes, or "make it feel like this" references into a grounded DESIGN.md plus an implementation handoff. Use it before prototypes, decks, redesigns, or image remix work when… |
+| `skills/open-design/skills/release-notes-one-pager` | Release notes one-page HTML with highlights, Added, Fixed, Breaking changes, Known issues, and Upgrade note. Writes explicit "None" style sections whenever the user does not provide details. |
+| `skills/open-design/skills/remotion` | Programmatic video creation with React. Useful for branded explainers, social cuts, dashboards-to-video, and reproducible motion graphics. |
+| `skills/open-design/skills/replicate` | Discover, compare, and run AI models using Replicate's API. Strong fit for image, audio, and video generation pipelines that swap models frequently. |
+| `skills/open-design/skills/research-decision-room` | Turn messy user research notes, interviews, support tickets, surveys, and product context into an evidence-backed decision room: a single HTML artifact with an evidence ledger, theme map, confidence heatmap, opportuni… |
+| `skills/open-design/skills/resume-modern` | Modern minimal resume, single A4 page, ready for print or PDF export. |
+| `skills/open-design/skills/review-animations` | Reviews animation and motion code against a high craft bar derived from Emil Kowalski's design engineering philosophy. Default to flagging; approval is earned. |
+| `skills/open-design/skills/screenshot` | Capture desktop, app windows, or pixel regions across OS platforms. Useful for marketing screenshots, design reviews, and bug reports. |
+| `skills/open-design/skills/screenshots-marketing` | Generate marketing screenshots with Playwright. Useful for landing-page hero shots, App Store screenshots, and changelog visuals. |
+| `skills/open-design/skills/shadcn-ui` | Build UI components with shadcn/ui. Pairs with the Stitch design loop to ship structured, accessible components quickly. |
+| `skills/open-design/skills/shader-dev` | GLSL shader techniques for ray marching, fluid simulation, particle systems, and procedural generation. Useful for hero visuals and motion stills. |
+| `skills/open-design/skills/slack-gif-creator` | Create animated GIFs optimized for Slack with validators for size constraints and composable animation primitives. |
+| `skills/open-design/skills/slides` | Create and edit .pptx presentation decks with PptxGenJS. Useful for sales decks, kickoff briefs, and design-system showcases. |
+| `skills/open-design/skills/social-reddit-card` | Realistic Reddit post card with vote rail and comment count, suited to video overlays or story sharing. |
+| `skills/open-design/skills/social-spotify-card` | Spotify Now Playing-style card with album art, progress bar, and playback controls, suited to video overlays or personal homepages. |
+| `skills/open-design/skills/social-x-post-card` | Realistic X post card with engagement metrics (likes, reposts, views), suited to video overlays or shareable image cards. |
+| `skills/open-design/skills/soft-skill` | Teaches the AI to design like a high-end agency. Defines the exact fonts, spacing, shadows, card structures, and animations that make a website feel expensive. Blocks all the common defaults that make AI designs look … |
+| `skills/open-design/skills/sora` | Generate, remix, and manage short video clips via OpenAI's Sora API. Useful for cinematic shots, b-roll, and rapid concept video iteration. |
+| `skills/open-design/skills/speech` | Generate spoken audio from text using OpenAI's API with built-in voices. Useful for narrated explainers, lecture audio, and quick voiceover tracks. |
+| `skills/open-design/skills/stitch-loop` | Iterative design-to-code feedback loop. Critique → adjust → ship cycle for tightening visual fidelity between brief and built UI. |
+| `skills/open-design/skills/stitch-skill` | Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that enforce premium, anti-generic UI standards — strict typography, calibrated color, asymmetric layouts, perpetual micro-motio… |
+| `skills/open-design/skills/swiftui-design` | SwiftUI 前端设计 skill — anti AI-slop rules, design direction advisor, brand asset protocol, and five-dimension review. Works with Claude Code, Cursor, Codex, and OpenCode. |
+| `skills/open-design/skills/swiss-creative-mode-template` | Swiss-inspired creative-mode presentation template skill with bold editorial typography, high-contrast geometric cards, interactive slide navigation, theme switching, hotspot overlays, and palette choreography in a si… |
+| `skills/open-design/skills/swiss-user-research-video-template` | Swiss-style user-research narrative template in warm-paper editorial aesthetics. Use when users ask for a premium research deck or story-first live artifact with minimalist typography, high-clarity layout, subtle moti… |
+| `skills/open-design/skills/taste-skill` | Anti-slop frontend skill for landing pages, portfolios, and redesigns. The agent reads the brief, infers the right design direction, and ships interfaces that do not look templated. Real design systems when applicable… |
+| `skills/open-design/skills/taste-skill-v1` | The original v1 taste-skill, preserved for projects depending on its exact behavior. The current default is `design-taste-frontend` (v2 experimental), which is a substantial rewrite. Use this v1 install name only if y… |
+| `skills/open-design/skills/theme-factory` | Apply professional font and color themes to artifacts including slides, docs, reports, and HTML landing pages. Ships 10 pre-set themes. |
+| `skills/open-design/skills/threejs` | Three.js skills for creating 3D elements and interactive experiences in the browser — scenes, materials, controls, and post-processing. |
+| `skills/open-design/skills/ui-animation` | Implement, review, and measure UI motion. Reconstruct easing, springs and gestures from a recording using bundled frame extraction, tracking and curve-fitting tools when available. |
+| `skills/open-design/skills/ui-skills` | Opinionated, evolving constraints to guide agents when building interfaces. Useful for keeping output coherent across many small UI pieces. |
+| `skills/open-design/skills/ui-ux-pro-max` | Catalog-only UI/UX Pro Max entry. The full upstream templates, data, and search workflow are not bundled in OpenDesign. |
+| `skills/open-design/skills/venice-audio-music` | Music generation queueing, retrieval, and completion endpoints via Venice.ai. Suited for jingles, background loops, and prototype scoring. |
+| `skills/open-design/skills/venice-audio-speech` | Text-to-speech models, voices, formats, and streaming via Venice.ai. Useful for narration, voiceover, and conversational agent voices. |
+| `skills/open-design/skills/venice-image-edit` | Image edits, upscaling, and background removal via the Venice.ai API. |
+| `skills/open-design/skills/venice-image-generate` | Image generation endpoints and available styles via the Venice.ai API. |
+| `skills/open-design/skills/venice-video` | Video generation and transcription workflows via the Venice.ai API. |
+| `skills/open-design/skills/vfx-text-cursor` | Cursor light trail, chromatic rays, and directional flares for word-by-word quote reveals in video intros. |
+| `skills/open-design/skills/video-downloader` | Download videos from YouTube and other platforms for offline viewing, editing, or archival with support for various formats and quality options. |
+| `skills/open-design/skills/video-hyperframes` | Hyperframes / Remotion-compatible continuous frame animation with autoplay support. |
+| `skills/open-design/skills/web-artifacts-builder` | Build complex claude.ai HTML artifacts with React and Tailwind. Anthropic's reference workflow for shipping rich, embeddable artifacts. |
+| `skills/open-design/skills/web-clone` | 网站复刻 / 克隆方法论。USE WHEN 用户说 复刻网站、克隆网站、clone website、抄个站、仿站、 照着这个站做一个、reproduce site、还原某个网页效果、把这个站搬下来改成我的、 复刻某个交互/WebGL/Canvas/Three.js 效果。提供「先拿真源码 → 判路径 → 逆向拆解 → 搭工程 → 替换内容」的可移植决策树，覆盖静态站 / React-Vue-Next 内容站 / WebGL-Can… |
+| `skills/open-design/skills/web-design-guidelines` | Review UI code for Web Interface Guidelines compliance by the Vercel engineering team. Covers layout, typography, color, motion, and accessibility for product UI. |
+| `skills/open-design/skills/weread-year-in-review-video-template` | WeRead-inspired HyperFrames video template for vertical annual reading reports, personal reading dashboards, book-note recaps, and shareable year-in-review stories. Use when users want a 9:16 HTML-to-MP4 reading repor… |
+| `skills/open-design/skills/wpds` | WordPress Design System. Apply WordPress's official design tokens, typography, and component patterns to themes and sites. |
+| `skills/open-design/skills/writing-guidelines` | Review docs/prose for Writing Guidelines compliance. Use when asked to "review my docs", "check writing style", "audit prose", "review docs voice and tone", or "check this page against the writing handbook". |
+| `skills/open-design/skills/youtube-clipper` | YouTube clip generation and editing with automated workflows — pull source video, slice highlights, add captions, and export. |
+
+## Skills : claude-video
+
+| Skill | Description |
+|---|---|
+| `skills/claude-video/skills/watch` | Watch a video (URL or local path). Downloads with yt-dlp, extracts auto-scaled frames with ffmpeg, pulls the transcript from captions (or local WhisperX / cloud Whisper fallback), and hands the result to the agent so … |
+
+## Skills : graphify
+
+| Skill | Description |
+|---|---|
+| `skills/graphify/graphify` | Use for any question about a codebase, its architecture, file relationships, or project content — especially when graphify-out/ exists, where the question should be treated as a graphify query first. Turns any input (… |
+
+## Skills : caveman
+
+| Skill | Description |
+|---|---|
+| `skills/caveman/plugins/caveman/skills/cavecrew` | When to delegate to `cavecrew-investigator` (locate code), `cavecrew-builder` (1-2 file edit) or `cavecrew-reviewer` (diff review) instead of working inline or using `Explore`. Their output is compressed, so main cont… |
+| `skills/caveman/plugins/caveman/skills/caveman` | Terse caveman voice: answer first, fluff gone, every technical fact kept. Use for /caveman, "caveman mode", "talk like caveman", "be brief", "less tokens". Stays on until "stop caveman" or "normal mode". |
+| `skills/caveman/plugins/caveman/skills/caveman-compress` | Compress a memory file such as CLAUDE.md or a todo list into caveman format to save input tokens, keeping a readable backup. Sends the file's text to the configured model provider. Trigger: /caveman-compress. |
+| `skills/caveman/plugins/caveman/skills/caveman-stats` | Show recorded output and cache-read token usage and mode attribution for the current Claude Code session, or locate the host's native usage report. Trigger: /caveman-stats. |
+| `skills/caveman/plugins/caveman/skills/megacave` | Caveman in Classical Chinese: 文言文 register, far fewer characters, technical terms verbatim. Invoke only with /megacave or /caveman wenyan. Stays on until "stop caveman" or "normal mode". |
+| `skills/caveman/plugins/caveman/skills/ultracave` | Caveman at maximum compression: fragments, one word when one word is enough, each fact once. Invoke only with /ultracave or /caveman ultra. Stays on until "stop caveman" or "normal mode". |
+| `skills/caveman/skills/cavecrew` | When to delegate to `cavecrew-investigator` (locate code), `cavecrew-builder` (1-2 file edit) or `cavecrew-reviewer` (diff review) instead of working inline or using `Explore`. Their output is compressed, so main cont… |
+| `skills/caveman/skills/caveman` | Terse caveman voice: answer first, fluff gone, every technical fact kept. Use for /caveman, "caveman mode", "talk like caveman", "be brief", "less tokens". Stays on until "stop caveman" or "normal mode". |
+| `skills/caveman/skills/caveman-commit` | Write a Conventional Commits message compressed to intent only. Use for "write a commit", "commit message", /commit or /caveman-commit. |
+| `skills/caveman/skills/caveman-compress` | Compress a memory file such as CLAUDE.md or a todo list into caveman format to save input tokens, keeping a readable backup. Sends the file's text to the configured model provider. Trigger: /caveman-compress. |
+| `skills/caveman/skills/caveman-discover` | Find and label every LLM workflow in the repository so Caveman Cloud groups spend by workflow instead of one bucket. Use for "discover workflows" or breaking LLM spend down by workflow. |
+| `skills/caveman/skills/caveman-evidence-review` | Read-only review of Caveman Cloud evidence: cost, Cave Score, workflows, traces, latency, errors, routing, savings. Use when asked what Caveman found or where LLM spend goes. |
+| `skills/caveman/skills/caveman-explore` | Read-only repository explorer for cold-start orientation, broad cross-file localization, or when a direct search failed. Skip it when the exact file or symbol is already named. Returns path:line citations only; its re… |
+| `skills/caveman/skills/caveman-help` | Quick-reference card for the three caveman skills and their commands. Trigger: /caveman-help or "caveman help". |
+| `skills/caveman/skills/caveman-learn` | Act on a Caveman learn report - review the ranked token sinks, apply cost-lowering fixes with per-edit consent, and report what those fixes returned. Use when asked to lower an agent's token cost, what caveman has sav… |
+| `skills/caveman/skills/caveman-manage` | Inspect Caveman Cloud's experiment lifecycle and block unsafe execution. Use when asked to start, approve, cancel, promote or roll back a Caveman experiment. |
+| `skills/caveman/skills/caveman-optimize` | Turn a Caveman optimization observation into an operator-chosen candidate with a paired baseline evaluation. Use when asked to inspect or evaluate a Caveman optimization report. Needs explicit approval. |
+| `skills/caveman/skills/caveman-review` | Compressed code review - one line per finding with location, problem and fix. Use for /caveman-review, "review this PR", or "review the diff". |
+| `skills/caveman/skills/caveman-setup` | Wire a repository through the Caveman Cloud gateway so every LLM request is measured, with no behavior change. Use for "set up caveman" or adding LLM spend observability. |
+| `skills/caveman/skills/caveman-stats` | Show recorded output and cache-read token usage and mode attribution for the current Claude Code session, or locate the host's native usage report. Trigger: /caveman-stats. |
+| `skills/caveman/skills/investigate-first` | Diagnose ambiguous failures before editing. Use for unknown causes, intermittent behavior, performance regressions, or investigations needing evidence-ranked hypotheses. |
+| `skills/caveman/skills/lean-build` | Build feature work with high overbuilding risk. Use for new behavior, product slices, or integrations where repository reuse, strict scope, and an explicit stop condition matter. |
+| `skills/caveman/skills/megacave` | Caveman in Classical Chinese: 文言文 register, far fewer characters, technical terms verbatim. Invoke only with /megacave or /caveman wenyan. Stays on until "stop caveman" or "normal mode". |
+| `skills/caveman/skills/migration` | Implement reversible compatibility-safe transitions. Use for schema, data, API, protocol, configuration, or dependency migrations requiring rollback and preservation proof. |
+| `skills/caveman/skills/safe-refactor` | Restructure code while preserving behavior. Use for extraction, consolidation, ownership moves, or cleanup where verification must bracket structural edits. |
+| `skills/caveman/skills/surgical-patch` | Fix bugs and small behavior changes at the narrowest responsible layer. Use when regression proof, preserved surrounding behavior, and task-relevant tests matter. |
+| `skills/caveman/skills/ultracave` | Caveman at maximum compression: fragments, one word when one word is enough, each fact once. Invoke only with /ultracave or /caveman ultra. Stays on until "stop caveman" or "normal mode". |
+| `skills/caveman/skills/verify-and-stop` | Prove existing work meets acceptance conditions without expanding scope. Use for validation-only tasks, completion checks, focused gate runs, and last-mile proof. |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

@@ -4,6 +4,9 @@ Réserve personnelle de skills Claude Code et de ressources de référence. **Ri
 
 Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 
+- [`MEMORY.md`](MEMORY.md) : mémoire de travail (préférences, décisions, tâches en suspens), lue et tenue à jour par Claude à chaque session.
+- [`local/install-local.sh`](local/install-local.sh) : installe sur l'ordinateur de l'utilisateur les outils retenus pour toutes les sessions locales (context7 et claude-mem en mode local, sans compte ni télémétrie).
+
 ## Contenu
 
 | Dossier | Source | Commit | Licence |

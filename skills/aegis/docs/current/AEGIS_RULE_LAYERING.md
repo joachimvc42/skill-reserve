@@ -1,0 +1,124 @@
+# Aegis Rule Layering
+
+Status: `Approved`
+
+## 1. Document Scope
+
+This document defines the layered boundaries of the current `Aegis` rule system.
+
+This document is only responsible for answering the following questions:
+
+- Which rules belong to the portable method layer core
+- Which rules belong to host / profile preferences
+- Which rules belong to the current repository's contribution constraints
+
+---
+
+## 2. Three-Layer Rule Model
+
+### 2.1 Portable Method Rules
+
+Rules suitable for entry into the `Aegis Method Pack` core include:
+
+- Outcome principles from `AEGIS_PROCESS_BASELINE.md` §2
+- TLREF
+- DIVE
+- Reflection
+- QA
+- Evidence-Driven
+- Dual-Track Governance
+- Output Contract
+
+### 2.2 Host / Profile Rules
+
+Rules that should not be directly written into the general method-pack baseline include:
+
+- `sequential-thinking`
+- Preferring `serena` / `context7`
+- Host-specific tool routing
+- Assembly methods unique to a particular plugin platform
+
+These rules should enter:
+
+- Host adapter docs
+- Host-specific profile
+- Install / usage guide
+
+Bootstrap adapters must stay thin. A host adapter may decide activation mode,
+TDD mode, JSON shape, skill discovery path, legacy warnings, and host tool
+mapping, but it should source the portable hot path from
+`skills/using-aegis/SKILL.md` or a host-native reference to that file. It should
+not copy the full skill body into a separate prompt owner, replace
+task-specific skills with one large fixed prompt, or grant runtime /
+completion authority.
+
+### 2.3 Repo Contribution Rules
+
+Rules that only constrain current repository contributions and local implementation include:
+
+- File length limits
+- Naming conventions
+- Repository security and commit constraints
+- Document placement constraints
+
+These rules should not be automatically elevated to cross-host general methodology.
+
+---
+
+## 3. Current Owners And Manual Projections
+
+The current portable entry owner is `skills/using-aegis/SKILL.md`: a short
+outcome-principle projection plus routing, including skill-copy installations
+that do not carry `docs/current/`. Process owns the shared principles; quality
+owns acceptance criteria; task skills own procedures and output contracts.
+Entry is not a second workflow owner. Read the current-doc index by decision,
+then the relevant section; do not recursively load all linked baselines.
+Activation and TDD mode semantics are owned by
+`AEGIS_ACTIVATION_MODE.md` and `AEGIS_TDD_MODE.md` respectively.
+
+The root `GLOBAL_USER_RULES_TEMPLATE.md` and
+`GLOBAL_USER_RULES_TEMPLATE.zh-CN.md` files are English and Chinese mirrors of
+one manual host/profile routing prefix. They are not method owners, host
+adapters, or proof that Aegis is installed and discoverable. They are not
+updated by `aegis:update`; users must re-copy or merge them when a release
+changes the projected routing semantics.
+
+The routing prefix may retain only the stable host/profile integration needed
+before a task-specific skill owns the workflow: activation-mode entry, minimal
+skill loading, fast-path behavior, context re-entry, and the distinction
+between Activation Mode and TDD Mode. It must not duplicate planning,
+debugging, TDD execution, verification, governance, output contracts, exact
+skill output shapes, or host-specific tool routing.
+
+Projection maintenance follows these rules:
+
+- Keep one functional routing-prefix profile with aligned English and Chinese
+  mirrors; do not reintroduce Lite / Advanced capability tiers.
+- Keep portable entry guidance in `skills/using-aegis/SKILL.md` and detailed
+  workflow governance in task-specific skills and their current-doc owners,
+  rather than projecting them into global user rules.
+- The former `GLOBAL_USER_RULES_LITE*` files are retired duplicate profiles.
+  Existing manual copies should replace only their old Aegis Lite / Advanced
+  blocks with the unified prefix; unrelated pre-existing global rules remain
+  unchanged.
+- Keep shared semantics aligned across English and Chinese without requiring
+  byte-for-byte translation.
+- When activation, TDD, routing, priority, verification, or authority semantics
+  change, review both language mirrors and publish a manual-copy migration
+  note.
+
+---
+
+## 4. Design Constraints
+
+Any subsequent rule addition must first answer:
+
+1. Is it portable across hosts
+2. Does it depend on specific tool capabilities
+3. Does it only serve current repository contributions
+
+Only the first category is permitted to enter the method-pack core. Define a
+principle once at its canonical owner. Other surfaces carry only a necessary
+summary, stage-specific action, or acceptance criterion; they do not independently
+redefine it. Test that readers can find conditional detail. Entry summaries must
+remain usable in skill-copy installs without requiring the current-doc tree.

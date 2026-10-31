@@ -87,6 +87,34 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/superpowers/skills/writing-plans` | Use when you have a spec or requirements for a multi-step task, before touching code |
 | `skills/superpowers/skills/writing-skills` | Use when creating new skills, editing existing skills, or verifying skills work before deployment |
 
+## Skills : aegis
+
+| Skill | Description |
+|---|---|
+| `skills/aegis/skills/anti-entropy-governance` | Use when touching retiring old logic, collapsing duplicate owners, removing fallbacks, or schema/persistence/source-of-truth boundaries; identify opportunities automatically; destructive execution requires explicit co… |
+| `skills/aegis/skills/brainstorming` | Use when defining ambiguous or high-complexity new features, product behavior, UI/component design, architecture choices, contract changes, or when grilling/pressure-testing a plan or design. Routine small requests st… |
+| `skills/aegis/skills/communicating-concisely` | Use when the user asks for caveman mode, fewer tokens, brief responses, compressed communication, or otherwise explicitly requests a much shorter answer. |
+| `skills/aegis/skills/dispatching-parallel-agents` | Use when facing 2+ independent tasks without a written plan, with no conflicting shared mutable state or sequential dependencies, where parallel delegation beats inline cost; otherwise inline. Planned tasks use subage… |
+| `skills/aegis/skills/establishing-project-context` | Use when the user asks to establish shared project language, or project work exposes a conflicting, renamed, or deprecated domain term that needs active semantic modeling. Routine small tasks stay on the fast path. |
+| `skills/aegis/skills/executing-plans` | Use when executing a written implementation plan across sessions or with review checkpoints. Small or single-slice plans stay inline. For same-session independent tasks, use subagent-driven-development instead. |
+| `skills/aegis/skills/finishing-a-development-branch` | Use when verified work needs integration or cleanup of an existing task-created branch/worktree, or the user explicitly requests merge, PR, or branch lifecycle handling. |
+| `skills/aegis/skills/first-principles-review` | Use when asked for first-principles or Occam's-razor review, or when high-risk decisions involve competing constraints, fallback growth, duplicate owners, or architecture direction risk. Ordinary bug fixes stay on the… |
+| `skills/aegis/skills/goal-framing` | Use when the user explicitly sets an Aegis goal with /aegis-goal, Aegis goal:, or asks to define goal, success evidence, stop condition, or task boundaries before work. |
+| `skills/aegis/skills/long-task-continuation` | Use when a task is multi-step, may span context resets or sessions, uses subagents, or risks losing state before completion. |
+| `skills/aegis/skills/receiving-code-review` | Use when receiving code review feedback before implementing suggestions, especially when feedback is unclear, risky, disputed, or technically questionable. |
+| `skills/aegis/skills/recording-architecture-decisions` | Use when the user asks to create, write, update, amend, supersede, or evaluate an ADR, architecture decision record, durable architecture decision, decision log, or baseline sync after architecture-changing work. |
+| `skills/aegis/skills/requesting-code-review` | Use when requesting independent code review, after implementation slices, before merging high-risk work, or when verification exposes evidence, baseline, architecture, compatibility, or retirement uncertainty. |
+| `skills/aegis/skills/subagent-driven-development` | Use when executing a written implementation plan with independent tasks in the current session where delegation beats inline coordination cost; otherwise inline. Ad-hoc 2+ tasks without a plan use dispatching-parallel… |
+| `skills/aegis/skills/systematic-debugging` | Use when encountering a bug, test failure, or unexpected behavior, before proposing fixes |
+| `skills/aegis/skills/test-driven-development` | Use when the user explicitly requests strict or test-first TDD, or when the current conversation already contains an explicit `TDD Route: strict` decision from another Aegis workflow. |
+| `skills/aegis/skills/ui-ux-governance` | Use when designing, changing, or reviewing user-facing interfaces or interaction flows, including API changes that alter visible states or recovery. Backend-only work without user-facing effects stays on its existing … |
+| `skills/aegis/skills/update-aegis` | Use when the user says `aegis:update`, asks to update or upgrade an installed Aegis method-pack, wants the latest Aegis version, or asks whether Aegis is current on this host. |
+| `skills/aegis/skills/using-aegis` | Use when starting a turn or checking Aegis skill routing. |
+| `skills/aegis/skills/using-git-worktrees` | Use when a coding task needs a concurrent checkout, unrelated dirty state blocks safe branch switching, or the user or repository explicitly requires a worktree. |
+| `skills/aegis/skills/verification-before-completion` | Use when about to claim work is complete, fixed, passing, verified, release-ready, or ready to commit, merge, publish, or hand off. |
+| `skills/aegis/skills/writing-plans` | Use when you have an approved spec or written requirements for a multi-step task that needs a durable plan document before touching code. Small, single-owner, or fast-path tasks do not need this skill. |
+| `skills/aegis/skills/writing-skills` | Use when creating new skills, editing existing skills, or verifying skills work before deployment |
+
 ## Skills : firecrawl
 
 | Skill | Description |

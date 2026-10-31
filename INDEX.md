@@ -557,6 +557,7 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 
 | Skill | Description |
 |---|---|
+| `skills/graphify` | (pas de SKILL.md : outil CLI, voir README.md du dossier et le README de la réserve) |
 | `skills/graphify/graphify` | Use for any question about a codebase, its architecture, file relationships, or project content — especially when graphify-out/ exists, where the question should be treated as a graphify query first. Turns any input (… |
 
 ## Skills : caveman
@@ -591,6 +592,107 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/caveman/skills/surgical-patch` | Fix bugs and small behavior changes at the narrowest responsible layer. Use when regression proof, preserved surrounding behavior, and task-relevant tests matter. |
 | `skills/caveman/skills/ultracave` | Caveman at maximum compression: fragments, one word when one word is enough, each fact once. Invoke only with /ultracave or /caveman ultra. Stays on until "stop caveman" or "normal mode". |
 | `skills/caveman/skills/verify-and-stop` | Prove existing work meets acceptance conditions without expanding scope. Use for validation-only tasks, completion checks, focused gate runs, and last-mile proof. |
+
+## Skills : claude-plugins-official
+
+| Skill | Description |
+|---|---|
+| `skills/claude-plugins-official/external_plugins/discord/skills/access` | Manage Discord channel access — approve pairings, edit allowlists, set DM/group policy. Use when the user asks to pair, approve someone, check who's allowed, or change policy for the Discord channel. |
+| `skills/claude-plugins-official/external_plugins/discord/skills/configure` | Set up the Discord channel — save the bot token and review access policy. Use when the user pastes a Discord bot token, asks to configure Discord, asks "how do I set this up" or "who can reach me," or wants to check c… |
+| `skills/claude-plugins-official/external_plugins/imessage/skills/access` | Manage iMessage channel access — approve pairings, edit allowlists, set DM/group policy. Use when the user asks to pair, approve someone, check who's allowed, or change policy for the iMessage channel. |
+| `skills/claude-plugins-official/external_plugins/imessage/skills/configure` | Check iMessage channel setup and review access policy. Use when the user asks to configure iMessage, asks "how do I set this up" or "who can reach me," or wants to know why texts aren't reaching the assistant. |
+| `skills/claude-plugins-official/external_plugins/telegram/skills/access` | Manage Telegram channel access — approve pairings, edit allowlists, set DM/group policy. Use when the user asks to pair, approve someone, check who's allowed, or change policy for the Telegram channel. |
+| `skills/claude-plugins-official/external_plugins/telegram/skills/configure` | Set up the Telegram channel — save the bot token and review access policy. Use when the user pastes a Telegram bot token, asks to configure Telegram, asks "how do I set this up" or "who can reach me," or wants to chec… |
+| `skills/claude-plugins-official/plugins/claude-code-setup/skills/claude-automation-recommender` | Analyze a codebase and recommend Claude Code automations (hooks, subagents, skills, plugins, MCP servers). Use when user asks for automation recommendations, wants to optimize their Claude Code setup, mentions improvi… |
+| `skills/claude-plugins-official/plugins/claude-md-management/skills/claude-md-improver` | Audit and improve CLAUDE.md files in repositories. Use when user asks to check, audit, update, improve, or fix CLAUDE.md files. Scans for all CLAUDE.md files, evaluates quality against templates, outputs quality repor… |
+| `skills/claude-plugins-official/plugins/claude-security/skills/claude-security` | Claude Security: scan the codebase (the whole repository or a scoped part of it), scan changes (this branch's or a pull request's diff, or one commit), or suggest patches (findings turned into targeted patch files, ea… |
+| `skills/claude-plugins-official/plugins/cwc-makers/skills/cardputer-buddy` | Iterate on the Cardputer-Adv MicroPython app bundle (Claude Buddy, Snake, Hello) after the device is already provisioned via m5-onboard. Use when the user wants to add a new app, push a single changed .py without re-f… |
+| `skills/claude-plugins-official/plugins/cwc-makers/skills/m5-onboard` | End-to-end onboarding for a freshly-plugged-in M5Stack ESP32 device (Cardputer, Cardputer-Adv, Core, CoreS3, Stick) — detect on USB, flash UIFlow 2.0 firmware, and install the Claude Buddy MicroPython app bundle. Use … |
+| `skills/claude-plugins-official/plugins/example-plugin/skills/example-command` | An example user-invoked skill that demonstrates frontmatter options and the skills/<name>/SKILL.md layout |
+| `skills/claude-plugins-official/plugins/example-plugin/skills/example-skill` | This skill should be used when the user asks to "demonstrate skills", "show skill format", "create a skill template", or discusses skill development patterns. Provides a reference template for creating Claude Code plu… |
+| `skills/claude-plugins-official/plugins/frontend-design/skills/frontend-design` | Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults. |
+| `skills/claude-plugins-official/plugins/hookify/skills/writing-rules` | This skill should be used when the user asks to "create a hookify rule", "write a hook rule", "configure hookify", "add a hookify rule", or needs guidance on hookify rule syntax and patterns. |
+| `skills/claude-plugins-official/plugins/math-olympiad/skills/math-olympiad` | Solve competition math problems (IMO, Putnam, USAMO, AIME) with adversarial verification that catches the errors self-verification misses. Activates when asked to 'solve this IMO problem', 'prove this olympiad inequal… |
+| `skills/claude-plugins-official/plugins/math-proof/skills/siege` | Work on one hard mathematics problem in rounds: each round a judge writes a few self-contained questions, independent workers answer them, and the judge keeps a ledger of what is proved, refuted and open, until the ju… |
+| `skills/claude-plugins-official/plugins/math-proof/skills/solo` | Work on one hard mathematics problem in this session yourself, with no sub-agents: reason in stages, record each settled step in a notes file so that nothing written is lost if a response is cut off, and end with a se… |
+| `skills/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcp-app` | This skill should be used when the user wants to build an "MCP app", add "interactive UI" or "widgets" to an MCP server, "render components in chat", build "MCP UI resources", make a tool that shows a "form", "picker"… |
+| `skills/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcp-server` | This skill should be used when the user asks to "build an MCP server", "create an MCP", "make an MCP integration", "wrap an API for Claude", "expose tools to Claude", "make an MCP app", or discusses building something… |
+| `skills/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcpb` | This skill should be used when the user wants to "package an MCP server", "bundle an MCP", "make an MCPB", "ship a local MCP server", "distribute a local MCP", discusses ".mcpb files", mentions bundling a Node or Pyth… |
+| `skills/claude-plugins-official/plugins/playground/skills/playground` | Creates interactive HTML playgrounds — self-contained single-file explorers that let users configure something visually through controls, see a live preview, and copy out a prompt. Use when the user asks to make a pla… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/agent-development` | This skill should be used when the user asks to "create an agent", "add an agent", "write a subagent", "agent frontmatter", "when to use description", "agent examples", "agent tools", "agent colors", "autonomous agent… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/command-development` | This skill should be used when the user asks to "create a slash command", "add a command", "write a custom command", "define command arguments", "use command frontmatter", "organize commands", "create command with fil… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/hook-development` | This skill should be used when the user asks to "create a hook", "add a PreToolUse/PostToolUse/Stop hook", "validate tool use", "implement prompt-based hooks", "use ${CLAUDE_PLUGIN_ROOT}", "set up event-driven automat… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration` | This skill should be used when the user asks to "add MCP server", "integrate MCP", "configure MCP in plugin", "use .mcp.json", "set up Model Context Protocol", "connect external service", mentions "${CLAUDE_PLUGIN_ROO… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings` | This skill should be used when the user asks about "plugin settings", "store plugin configuration", "user-configurable plugin", ".local.md files", "plugin state files", "read YAML frontmatter", "per-project plugin set… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure` | This skill should be used when the user asks to "create a plugin", "scaffold a plugin", "understand plugin structure", "organize plugin components", "set up plugin.json", "use ${CLAUDE_PLUGIN_ROOT}", "add commands/age… |
+| `skills/claude-plugins-official/plugins/plugin-dev/skills/skill-development` | This skill should be used when the user wants to "create a skill", "add a skill to plugin", "write a new skill", "improve skill description", "organize skill content", or needs guidance on skill structure, progressive… |
+| `skills/claude-plugins-official/plugins/project-artifact/skills/project-artifact` | Generate and publish a project status artifact — an opinionated, tabbed status page for a project too big for one update (overview & success criteria, the workstream sequence, next steps, plus background, plan, risks … |
+| `skills/claude-plugins-official/plugins/receipts/skills/receipts` | Generate a personal Claude Code usage & impact report ("receipts") from this machine's local session transcripts — for justifying Claude Code usage/spend to a manager, self-review, or "what have I been using this for"… |
+| `skills/claude-plugins-official/plugins/session-report/skills/session-report` | Generate an explorable HTML report of Claude Code session usage (tokens, cache, subagents, skills, expensive prompts) from ~/.claude/projects transcripts. |
+| `skills/claude-plugins-official/plugins/skill-creator/skills/skill-creator` | Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill… |
+
+## Skills : context7
+
+| Skill | Description |
+|---|---|
+| `skills/context7/skills/context7-cli` | Use the ctx7 CLI to fetch library documentation and configure Context7 MCP. Activate when the user mentions "ctx7" or "context7", needs current docs for any library, or needs to set up Context7 for their AI coding agent. |
+| `skills/context7/skills/context7-mcp` | This skill should be used when the user asks about libraries, frameworks, API references, or needs code examples. Activates for setup questions, code generation involving libraries, or mentions of specific frameworks … |
+| `skills/context7/skills/find-docs` | Retrieves up-to-date documentation, API references, and code examples for any developer technology. Use this skill whenever the user asks about a specific library, framework, SDK, CLI tool, or cloud service — even for… |
+
+## Skills : claude-mem
+
+| Skill | Description |
+|---|---|
+| `skills/claude-mem/claude-mem-cursor/skills/agent-cost-report` | Believable agent cost report for any period, default the last 7 full days PT, not counting today. Measured tokens from Claude Code transcripts priced at OpenRouter list prices (ESTIMATED), measured provider spend when… |
+| `skills/claude-mem/claude-mem-cursor/skills/install` | Use this when setting up claude-mem on Cursor: local or remote worker, local host-login observer or remote cmem.ai inference. |
+| `skills/claude-mem/claude-mem-cursor/skills/mem-search` | Use this when the user asks to search memory, "did we already solve this?", "how did we do X last time?", or wants work from previous sessions. |
+| `skills/claude-mem/claude-mem-grok-bot/skills/agent-cost-report` | Believable agent cost report for any period, default the last 7 full days PT, not counting today. Measured tokens from Claude Code transcripts priced at OpenRouter list prices (ESTIMATED), measured provider spend when… |
+| `skills/claude-mem/claude-mem-grok-bot/skills/host-observer` | Use this when fulfilling claude-mem observer jobs on Grok Bot: reply only skip_summary or one full observation XML, never prose. |
+| `skills/claude-mem/claude-mem-grok-bot/skills/install` | Use this when setting up claude-mem on Grok Bot: local worker plus CMEM Pro observer (default), optional host-login observer, or remote cmem.ai. No Cursor required. |
+| `skills/claude-mem/claude-mem-grok-bot/skills/mem-search` | Use this when the user asks to search memory, "did we already solve this?", "how did we do X last time?", or wants work from previous sessions. |
+| `skills/claude-mem/cowork/skills/agent-cost-report` | Believable agent cost report for any period, default the last 7 full days PT, not counting today. Measured tokens from Claude Code transcripts priced at OpenRouter list prices (ESTIMATED), measured provider spend when… |
+| `skills/claude-mem/cowork/skills/mem-search` | This skill should be used when the user asks to "search memory", "what do you remember about X", "check claude-mem", "mem search", "find past observations", "what did we do last session", or wants prior-session contex… |
+| `skills/claude-mem/cowork/skills/mem-setup` | This skill should be used when the user asks to "set up claude-mem", "pair claude-mem", "connect cmem", "add my cmem key", "set up cloud sync in Cowork", or provides cmem.ai Connect values (sync token, user id, SyncHu… |
+| `skills/claude-mem/openclaw` | Claude-Mem OpenClaw Plugin — Setup Guide — This guide walks through setting up the claude-mem plugin on an OpenClaw gateway. By the end, your agents will have persistent memory across sessions via system prompt contex… |
+| `skills/claude-mem/openclaw/skills/agent-cost-report` | Believable agent cost report for any period, default the last 7 full days PT, not counting today. Measured tokens from Claude Code transcripts priced at OpenRouter list prices (ESTIMATED), measured provider spend when… |
+| `skills/claude-mem/openclaw/skills/do` | Execute a phased implementation plan using subagents. Use when asked to execute, run, or carry out a plan — especially one created by make-plan. |
+| `skills/claude-mem/openclaw/skills/make-plan` | Create a detailed, phased implementation plan with documentation discovery. Use when asked to plan a feature, task, or multi-step implementation — especially before executing with do. |
+| `skills/claude-mem/plugin/skills/agent-cost-report` | Believable agent cost report for any period, default the last 7 full days PT, not counting today. Measured tokens from Claude Code transcripts priced at OpenRouter list prices (ESTIMATED), measured provider spend when… |
+| `skills/claude-mem/plugin/skills/babysit` | Watch a pull request or review cycle until it is ready to merge. Use when asked to babysit, monitor, or keep checking PR comments, reviews, and CI until all actionable issues are resolved. |
+| `skills/claude-mem/plugin/skills/backup-setup` | Set up, check, or restore local claude-mem database snapshots. Use when the user says "set up backups", "back up my memories", "backup status", or "restore my database". |
+| `skills/claude-mem/plugin/skills/build` | Fully automate a coding task with make-plan, do, and babysit. |
+| `skills/claude-mem/plugin/skills/build-and-release` | Fully automate building and releasing a coding task. |
+| `skills/claude-mem/plugin/skills/ccs-align` | Run the CCS Align seat's hourly breathing cycle — prove the local claude-mem worker is healthy, pull needle observations through search → timeline → get_observations, land them in a seat-owned middle cache via atomic … |
+| `skills/claude-mem/plugin/skills/childhood` | Babysit a shipped release after merge, publication, or deployment. Verify published packages, production behavior, installed plugins, and late CI or user reports until the observation window is clean; use babysit for … |
+| `skills/claude-mem/plugin/skills/cloud-sync` | Set up or check claude-mem cloud sync with cmem.ai Pro. Use when the user says "set up cloud sync", "sync my memories", "cmem pro", "cloud backup", "sync status", or wants their memory database backed up or synced to … |
+| `skills/claude-mem/plugin/skills/design-is` | Audit a design against Dieter Rams' ten "Good design is..." principles, then hand off a /make-plan prompt for one of three outcomes — new design, refine design, or redesign. Use when the user says "audit this design",… |
+| `skills/claude-mem/plugin/skills/do` | Execute a phased implementation plan using subagents. Use when asked to execute, run, or carry out a plan — especially one created by make-plan. |
+| `skills/claude-mem/plugin/skills/handoff` | Generate a HANDOFF.md that captures goal, current state, files touched, failed attempts, and next steps — so a fresh Claude session can continue exactly where this one left off. Use when sessions are getting long, Cla… |
+| `skills/claude-mem/plugin/skills/how-it-works` | Explain how claude-mem captures observations, when memory injection kicks in, and where data lives. Use when the user asks "how does claude-mem work?" or "what is this thing doing?". |
+| `skills/claude-mem/plugin/skills/knowledge-agent` | Build and query AI-powered knowledge bases from claude-mem observations. Use when users want to create focused "brains" from their observation history, ask questions about past work patterns, or compile expertise on s… |
+| `skills/claude-mem/plugin/skills/learn-codebase` | Prime a codebase by reading every source file in full. Use when starting work on a new or unfamiliar project, or when the user asks to "learn the codebase", "read the codebase", "prime", or "get up to speed". |
+| `skills/claude-mem/plugin/skills/make-plan` | Create a detailed, phased implementation plan with documentation discovery. Use when asked to plan a feature, task, or multi-step implementation — especially before executing with do. |
+| `skills/claude-mem/plugin/skills/mem-search` | Smart search (default). Search claude-mem's persistent cross-session memory database in three steps: search, timeline, then selected get_observations. Use when user asks "did we already solve this?", "how did we do X … |
+| `skills/claude-mem/plugin/skills/mode-creator` | Interactively create, install, activate, and verify custom claude-mem modes, including domain-specific observation types, concept tags, optional Telegram alerts, bot setup, worker restart, and startup-context verifica… |
+| `skills/claude-mem/plugin/skills/oh-my-issues` | Cluster a GitHub issue backlog by root cause into a small set of plan-master issues, redirect children with a standardized comment, and bundle architectural-fix PRs that close clusters atomically. Use when an issue tr… |
+| `skills/claude-mem/plugin/skills/owner-goals` | Map what the owner wants from the prompts they typed themselves (prompts an agent wrote are left out), then sort it into focus areas, asks and rules, each with dated quotes, and save them to My Work (areas as My Focus… |
+| `skills/claude-mem/plugin/skills/pathfinder` | Map a codebase into feature-grouped flowcharts, identify duplicated concerns across features, and propose a unified architecture. Use when asked to "find the ideal path," unify duplicated systems, or audit architectur… |
+| `skills/claude-mem/plugin/skills/release` | Fully automate a release with version-bump and childhood. |
+| `skills/claude-mem/plugin/skills/request-progress` | Group recent conversations into overall requests, review each one's progress from memory, sort each into one of the owner's focus areas, and write the build story, so My Work shows progress meters, shipping velocity a… |
+| `skills/claude-mem/plugin/skills/screenpipe` | Search screen and audio history recorded by Screenpipe and optionally save selected context into claude-mem. Use when the user asks to recall desktop activity, a meeting, or something seen in another app through Scree… |
+| `skills/claude-mem/plugin/skills/smart-explore` | Token-optimized structural code search using tree-sitter AST parsing. Use instead of reading full files when you need to understand code structure, find functions, or explore a codebase efficiently. |
+| `skills/claude-mem/plugin/skills/standup` | Facilitate a read-only standup across git worktrees, branches, or PRs to compare changes and produce one consolidation plan. |
+| `skills/claude-mem/plugin/skills/timeline-report` | Generate a "Journey Into [Project]" narrative report analyzing a project's entire development history from claude-mem's timeline. Use when asked for a timeline report, project history analysis, development journey, or… |
+| `skills/claude-mem/plugin/skills/version-bump` | Automated semantic versioning and release workflow for Claude Code plugins. Handles version increments across package.json, marketplace.json, plugin.json manifests, build verification, git tagging, GitHub releases, an… |
+| `skills/claude-mem/plugin/skills/weekly-digests` | Generate a serial week-by-week narrative digest of a project's full claude-mem timeline. Splits the timeline into per-ISO-week files, then runs one consecutive subagent per week — each receiving the prior week's carry… |
+| `skills/claude-mem/plugin/skills/what-the` | What the? Use when the user wants a plain-English breakdown of something technical — the who, what, where, why, and when. |
+| `skills/claude-mem/plugin/skills/wowerpoint` | Turn one document into a kawaii NotebookLM slide deck. Use for "wowerpoint this", "make a deck about <file>", "turn this report into slides", or any request to render a single document as shareable narrative slides. |
+
+## Skills : ralph-claude-code
+
+| Skill | Description |
+|---|---|
+| `skills/ralph-claude-code` | (pas de SKILL.md : outil CLI, voir README.md du dossier et le README de la réserve) |
 
 ## Skills : ai-marketing
 

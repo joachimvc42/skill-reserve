@@ -1,0 +1,532 @@
+#!/usr/bin/env bats
+# E2E tests for complete Ralph loop execution (Issue #17)
+#
+# These tests run ralph_loop.sh as a TRUE SUBPROCESS with a mock `claude`
+# executable on disk — exercising the full lifecycle: startup validation,
+# loop iterations, response analysis, exit detection, and final status.
+# See tests/e2e/helpers/e2e_helper.bash for the harness.
+#
+# Scenarios already covered at unit/integration level (sourced functions) are
+# intentionally NOT duplicated here; each test below verifies behavior that
+# only manifests in a real end-to-end subprocess run.
+
+load '../helpers/test_helper'
+load 'helpers/e2e_helper'
+
+setup() {
+    setup_e2e_project
+}
+
+teardown() {
+    teardown_e2e_project
+}
+
+# =============================================================================
+# STARTUP VALIDATION
+# =============================================================================
+
+@test "E2E: missing .ralph/PROMPT.md halts startup with guidance" {
+    rm .ralph/PROMPT.md
+
+    run run_ralph
+
+    assert_failure
+    [[ "$output" == *"PROMPT.md"* ]]
+    [[ "$output" == *"ralph-enable"* ]]
+    # Claude must never have been invoked
+    assert_equal "$(mock_call_count)" "0"
+}
+
+@test "E2E: missing .ralphrc fails the integrity check at startup" {
+    rm .ralphrc
+
+    run run_ralph
+
+    assert_failure
+    [[ "$output" == *".ralphrc"* ]]
+    assert_equal "$(mock_call_count)" "0"
+}
+
+# =============================================================================
+# GRACEFUL EXITS
+# =============================================================================
+
+@test "E2E: fully completed fix_plan exits plan_complete with zero API calls" {
+    e2e_fix_plan 0 3   # all items checked
+
+    run run_ralph
+
+    assert_success
+    assert_equal "$(mock_call_count)" "0"
+    assert_equal "$(status_field exit_reason)" "plan_complete"
+    assert_equal "$(status_field status)" "completed"
+    assert_equal "$(status_field last_action)" "graceful_exit"
+}
+
+@test "E2E: repeated EXIT_SIGNAL true responses trigger graceful completion exit" {
+    queue_response 1 "COMPLETE" "true" "All planned work has shipped."
+    queue_productive_effect 1
+    queue_response 2 "COMPLETE" "true" "Confirming: nothing left to build."
+    queue_productive_effect 2
+
+    run run_ralph
+
+    assert_success
+    # Exit check at the start of loop 3 sees two completion signals
+    assert_equal "$(mock_call_count)" "2"
+    assert_equal "$(status_field exit_reason)" "completion_signals"
+    assert_equal "$(status_field status)" "completed"
+
+    # Side effects of a real loop iteration
+    assert_file_exists "src/work_1.txt"
+    [[ "$output" == *"Analyzing Claude Code response"* ]]
+    # Graceful exit resets the session (which clears .response_analysis)
+    assert_equal "$(jq -r '.reset_reason' .ralph/.ralph_session)" "project_complete"
+    assert_call_count 2
+    local output_log_count
+    output_log_count=$(ls .ralph/logs/claude_output_*.log 2>/dev/null | wc -l)
+    [[ $output_log_count -ge 2 ]] || fail "Expected >= 2 output logs, found $output_log_count"
+}
+
+@test "E2E: multi-loop run progresses through fix_plan to plan_complete" {
+    e2e_fix_plan 3 0
+    local i
+    for i in 1 2 3; do
+        queue_response "$i" "IN_PROGRESS" "false" "Implemented open task $i."
+        queue_productive_effect "$i"
+    done
+
+    run run_ralph
+
+    assert_success
+    assert_equal "$(mock_call_count)" "3"
+    assert_equal "$(status_field exit_reason)" "plan_complete"
+    # Loop counter advanced past the three working iterations
+    assert_equal "$(status_field loop_count)" "4"
+    assert_call_count 3
+    # Each loop produced its own output log
+    [[ $(ls .ralph/logs/claude_output_*.log | wc -l) -eq 3 ]]
+    # All work landed
+    assert_file_exists "src/work_1.txt"
+    assert_file_exists "src/work_2.txt"
+    assert_file_exists "src/work_3.txt"
+    [[ $(grep -c '^- \[ \]' .ralph/fix_plan.md) -eq 0 ]]
+}
+
+@test "E2E: three test-only loops exit with test_saturation" {
+    # The analyzer reads work_type from the TOP LEVEL of the JSON only
+    # (parse_json_response: `.work_type // "UNKNOWN"`); the WORK_TYPE line
+    # inside the RALPH_STATUS block is not parsed. Staged file effects keep
+    # the circuit breaker from opening before saturation triggers.
+    local i
+    for i in 1 2 3; do
+        queue_response "$i" "IN_PROGRESS" "false" "Ran the test suite again." \
+            "" '+ {work_type: "TEST_ONLY"}'
+        queue_effect "$i" << EOF
+echo "test run $i" > "src/tests_$i.txt"
+git add "src/tests_$i.txt"
+EOF
+    done
+
+    run run_ralph
+
+    assert_success
+    assert_equal "$(mock_call_count)" "3"
+    assert_equal "$(status_field exit_reason)" "test_saturation"
+    assert_equal "$(status_field status)" "completed"
+}
+
+# =============================================================================
+# CIRCUIT BREAKER (full-loop halt path)
+# =============================================================================
+
+@test "E2E: three no-progress loops open the circuit breaker and halt" {
+    # Default mock response is a no-progress analysis loop; queue nothing.
+    # "No progress" is determined from actual git state (staged/unstaged/
+    # committed changes since loop start), NOT from the FILES_MODIFIED line
+    # in RALPH_STATUS — the default response creates no files, so the
+    # circuit breaker sees three loops without progress and opens.
+
+    run run_ralph
+
+    # The loop halts via `break`; the script itself exits 0 (current behavior)
+    assert_success
+    assert_equal "$(mock_call_count)" "3"
+    assert_equal "$(status_field status)" "halted"
+    assert_equal "$(status_field last_action)" "circuit_breaker_open"
+    assert_equal "$(jq -r '.state' .ralph/.circuit_breaker_state)" "OPEN"
+}
+
+# =============================================================================
+# STALE STATE PROTECTION (Issue #194)
+# =============================================================================
+
+@test "E2E: stale exit signals from a prior run do not cause premature exit" {
+    # Simulate a crashed prior run that left completion signals behind
+    cat > .ralph/.exit_signals << 'EOF'
+{"test_only_loops": [], "done_signals": [1, 2], "completion_indicators": [1, 2]}
+EOF
+    queue_response 1 "COMPLETE" "true" "Wrapping up the remaining work."
+    queue_productive_effect 1
+    queue_response 2 "COMPLETE" "true" "Everything is finished now."
+    queue_productive_effect 2
+
+    run run_ralph
+
+    assert_success
+    # The stale signals were reset: Claude WAS invoked (twice) rather than
+    # the loop exiting at the first check with zero calls.
+    assert_equal "$(mock_call_count)" "2"
+    assert_equal "$(status_field exit_reason)" "completion_signals"
+}
+
+# =============================================================================
+# SESSION CONTINUITY
+# =============================================================================
+
+@test "E2E: session ID from loop 1 is persisted and resumed in loop 2" {
+    export CLAUDE_USE_CONTINUE=true
+    e2e_fix_plan 2 0
+
+    queue_response 1 "IN_PROGRESS" "false" "Started task one." "e2e-sess-abc123"
+    queue_productive_effect 1
+    queue_response 2 "IN_PROGRESS" "false" "Finished task two." "e2e-sess-abc123"
+    queue_productive_effect 2
+
+    run run_ralph
+
+    assert_success
+    assert_equal "$(mock_call_count)" "2"
+
+    # Session was persisted after loop 1 (the graceful exit later clears the
+    # session file, so the argv of loop 2 is the durable evidence)
+    [[ "$output" == *"Saved Claude session"* ]]
+
+    # Loop 1 started fresh (no --resume); loop 2 resumed the stored session
+    [[ $(grep -cx -- "--resume" "$MOCK_DIR/calls/argv_1.log") -eq 0 ]]
+    grep -qx -- "--resume" "$MOCK_DIR/calls/argv_2.log"
+    grep -qx "e2e-sess-abc123" "$MOCK_DIR/calls/argv_2.log"
+}
+
+# =============================================================================
+# RATE LIMIT TRACKING
+# =============================================================================
+
+@test "E2E: stale hourly counter is reset before the loop proceeds" {
+    # Simulate a counter exhausted in a previous hour
+    echo "99" > .ralph/.call_count
+    echo "2020010100" > .ralph/.last_reset
+
+    e2e_fix_plan 1 0
+    queue_response 1 "IN_PROGRESS" "false" "Knocked out the last open task."
+    queue_productive_effect 1
+
+    run run_ralph
+
+    assert_success
+    # Counter was reset for the new hour, then incremented once — not 100.
+    # Raw values are only assertable when the run itself didn't cross an
+    # hour boundary (Issue #285).
+    assert_call_count 1
+    e2e_hour_rolled_over || assert_equal "$(cat .ralph/.last_reset)" "$(date +%Y%m%d%H)"
+    assert_equal "$(status_field exit_reason)" "plan_complete"
+}
+
+# =============================================================================
+# CLI FLAGS IN A REAL RUN
+# =============================================================================
+
+@test "E2E: --calls and --no-continue take effect in a full run" {
+    # Pre-seed a stored session that --no-continue must ignore
+    echo "e2e-stale-session" > .ralph/.claude_session_id
+
+    e2e_fix_plan 1 0
+    queue_response 1 "IN_PROGRESS" "false" "Completed the only open task."
+    queue_productive_effect 1
+
+    run run_ralph --calls 7 --no-continue
+
+    assert_success
+    assert_equal "$(status_field max_calls_per_hour)" "7"
+    # --no-continue: the stored session must NOT be resumed
+    [[ $(grep -cx -- "--resume" "$MOCK_DIR/calls/argv_1.log") -eq 0 ]]
+}
+
+# =============================================================================
+# API LIMIT HANDLING
+# =============================================================================
+
+@test "E2E: API 5-hour limit response with user exit choice stops the loop" {
+    queue_raw_response 1 1 << 'EOF'
+You've reached your 5-hour usage limit for Claude.
+Please try again later when your limit resets.
+EOF
+
+    # Feed "2" (exit) to the interactive limit prompt
+    run bash -c "printf '2' | '$E2E_TIMEOUT_CMD' --foreground -k 5 120 bash '$RALPH_SCRIPT'"
+
+    assert_success
+    assert_equal "$(mock_call_count)" "1"
+    assert_equal "$(status_field last_action)" "api_limit_exit"
+    assert_equal "$(status_field status)" "stopped"
+    assert_equal "$(status_field exit_reason)" "api_5hour_limit"
+}
+
+# =============================================================================
+# INTERRUPTION (signal → cleanup trap)
+# =============================================================================
+
+# Note: SIGTERM is used because background jobs started by a non-interactive
+# shell (bats) have SIGINT set to SIG_IGN, which bash cannot trap. A terminal
+# Ctrl-C (SIGINT) runs the exact same cleanup() handler.
+@test "E2E: termination signal during execution records interrupted status and preserves call count" {
+    # Mock sleeps long enough for us to interrupt mid-execution
+    echo "60" > "$MOCK_DIR/responses/1.sleep"
+
+    # Direct invocation (not run_ralph), so record the start hour ourselves
+    # for the conditional call-count assertion below (Issue #285)
+    e2e_mark_run_start
+    bash "$RALPH_SCRIPT" > "$E2E_DIR/ralph_run.log" 2>&1 < /dev/null &
+    local ralph_pid=$!
+
+    # Wait until loop 1 is executing (call counter incremented)
+    local waited=0
+    while [[ "$(mock_call_count)" == "0" && $waited -lt 200 ]]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    assert_equal "$(mock_call_count)" "1"
+
+    # Signal ralph. Bash defers the trap until its current foreground command
+    # (the progress-monitor `sleep`) completes, so also signal ralph's sleep
+    # children — exactly what a terminal Ctrl-C does to the foreground process
+    # group. The mock claude keeps sleeping, which holds the loop in its
+    # monitor phase and keeps the interrupted status stable for assertion.
+    # Up to 20s ceiling (100 x 0.2s): the trap fires once ralph's current
+    # monitor `sleep 10` is interrupted, so the normal case completes in
+    # well under 1s. If this loop exhausts in CI, the assertions below fail
+    # with status still "running" — that symptom means the signal never
+    # reached ralph or the trap did not run.
+    kill -TERM "$ralph_pid"
+    local i
+    for i in $(seq 1 100); do
+        pkill -TERM -P "$ralph_pid" -x sleep 2>/dev/null || true
+        if jq -e '.last_action == "interrupted"' .ralph/status.json >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.2
+    done
+    # The run is effectively over once cleanup() has written its status; mark
+    # the end now so an hour boundary crossed during the assertions below
+    # cannot suppress the call-count check (Issue #285)
+    e2e_mark_run_end
+
+    # cleanup() writes last_action="interrupted", status="stopped"
+    assert_equal "$(status_field last_action)" "interrupted"
+    assert_equal "$(status_field status)" "stopped"
+    # Call counter preserved across interruption
+    assert_call_count 1
+
+    kill -KILL "$ralph_pid" 2>/dev/null || true
+    wait "$ralph_pid" 2>/dev/null || true
+}
+
+# =============================================================================
+# CLI FLAGS VS REPOSITORY .ralphrc (PR #363)
+# =============================================================================
+
+@test "E2E: CLI flags beat a repository .ralphrc (--allowed-tools, --calls)" {
+    # The repo's .ralphrc asks for a wide tool list and a big call budget; the
+    # user narrows both on the command line. The user's flags must win.
+    cat > .ralphrc << 'RC'
+ALLOWED_TOOLS="Write,Read,Edit,Bash(git *)"
+MAX_CALLS_PER_HOUR=100
+RC
+    unset ALLOWED_TOOLS CLAUDE_ALLOWED_TOOLS MAX_CALLS_PER_HOUR
+    e2e_fix_plan 1 0
+    queue_response 1 "IN_PROGRESS" "false" "Implemented the open task."
+    queue_productive_effect 1
+
+    run run_ralph --allowed-tools "Read" --calls 7
+
+    assert_success
+    assert_equal "$(mock_call_count)" "1"
+    grep -qx "Read" "$MOCK_DIR/calls/argv_1.log"
+    [[ $(grep -cxF 'Bash(git *)' "$MOCK_DIR/calls/argv_1.log") -eq 0 ]]
+    assert_equal "$(status_field max_calls_per_hour)" "7"
+}
+
+@test "E2E: arithmetic injection via a numeric .ralphrc key does not execute (PR #363)" {
+    # a[$(cmd)] in an arithmetic context runs cmd; MAX_CALLS_PER_HOUR reaches
+    # [[ $calls -ge $MAX_CALLS_PER_HOUR ]] in can_make_call on every loop
+    printf '%s\n' "MAX_CALLS_PER_HOUR='a[\$(touch $E2E_DIR/PWNED)]'" > .ralphrc
+    unset MAX_CALLS_PER_HOUR
+    e2e_fix_plan 1 0
+    queue_response 1 "IN_PROGRESS" "false" "Implemented the open task."
+    queue_productive_effect 1
+
+    run run_ralph
+
+    [ ! -e "$E2E_DIR/PWNED" ]
+    [[ "$output" == *"shell syntax"* ]]
+}
+
+# =============================================================================
+# UNTRUSTED NUMBERS NEVER REACH BASH ARITHMETIC (Issue #371)
+# =============================================================================
+
+@test "E2E: committed circuit-breaker state cannot execute code (#371)" {
+    # Valid JSON (so it survives init_circuit_breaker's validity check) with a
+    # payload in every numeric field record_loop_result coerces each loop.
+    # \${IFS} instead of a space: the reader strips whitespace, an attacker wouldn't use any
+    jq -n --arg p "a[\$(touch\${IFS}$E2E_DIR/PWNED)]" '{state: "CLOSED", consecutive_no_progress: $p,
+        consecutive_same_error: $p, consecutive_permission_denials: $p, last_progress_loop: $p,
+        total_opens: $p, current_loop: $p, reason: ""}' > .ralph/.circuit_breaker_state
+    e2e_fix_plan 1 0
+    queue_response 1 "IN_PROGRESS" "false" "Implemented the open task."
+    queue_productive_effect 1
+
+    run run_ralph
+
+    [ ! -e "$E2E_DIR/PWNED" ]
+    assert_equal "$(mock_call_count)" "1"
+    jq -e '.total_opens | numbers' .ralph/.circuit_breaker_state > /dev/null
+}
+
+@test "E2E: committed call/token counters cannot execute code (#371)" {
+    # A current-hour .last_reset stops init_call_tracking from resetting them
+    date +%Y%m%d%H > .ralph/.last_reset
+    echo "a[\$(touch $E2E_DIR/PWNED)]" > .ralph/.call_count
+    echo "a[\$(touch $E2E_DIR/PWNED)]" > .ralph/.token_count
+    export MAX_TOKENS_PER_HOUR=100000
+    e2e_fix_plan 1 0
+    queue_response 1 "IN_PROGRESS" "false" "Implemented the open task."
+    queue_productive_effect 1
+
+    run run_ralph
+
+    [ ! -e "$E2E_DIR/PWNED" ]
+    jq -e '.calls_made_this_hour | numbers' .ralph/status.json > /dev/null
+}
+
+@test "E2E: a numeric field in Claude's output cannot execute code (#371)" {
+    e2e_fix_plan 1 0
+    e2e_response_json "IN_PROGRESS" "false" "Implemented the open task." "" \
+        "+ {files_modified: \"a[\$(touch $E2E_DIR/PWNED)]\", error_count: \"a[\$(touch $E2E_DIR/PWNED)]\", metadata: {files_changed: \"a[\$(touch $E2E_DIR/PWNED)]\"}}" \
+        | queue_raw_response 1 0
+    queue_productive_effect 1
+
+    run run_ralph
+
+    [ ! -e "$E2E_DIR/PWNED" ]
+}
+
+# =============================================================================
+# NON-GIT WORKSPACE PROGRESS (Issue #340)
+# =============================================================================
+
+@test "E2E: self-reported progress keeps the circuit breaker closed when CWD is not a git repo (#340)" {
+    # Multi-repo workspace root: the loop CWD is not a git work tree, so
+    # git-based progress detection is blind. Claude reports FILES_MODIFIED: 1
+    # in its RALPH_STATUS block every loop (e2e_response_json does).
+    e2e_fix_plan 4 0
+    rm -rf .git
+    local i
+    for i in 1 2 3 4; do
+        queue_response "$i" "IN_PROGRESS" "false" "Committed to a sub-repo via git -C (loop $i)."
+        queue_effect "$i" << 'EFFECT'
+awk 'done != 1 && /^- \[ \]/ { sub(/^- \[ \]/, "- [x]"); done = 1 } { print }' \
+    .ralph/fix_plan.md > .ralph/fix_plan.md.tmp && mv .ralph/fix_plan.md.tmp .ralph/fix_plan.md
+EFFECT
+    done
+
+    run run_ralph
+
+    assert_equal "$(mock_call_count)" "4"
+    assert_equal "$(status_field exit_reason)" "plan_complete"
+    [[ "$(jq -r '.state' .ralph/.circuit_breaker_state)" == "CLOSED" ]]
+}
+
+# Shared body for the #340 non-git scenarios: 4 loops, each checks off one
+# plan item; the response text comes from $1 (a printf format with %d = loop).
+_nongit_four_loops() {
+    local fmt=$1 mode=${2:-json}
+    e2e_fix_plan 4 0
+    rm -rf .git
+    local i text
+    for i in 1 2 3 4; do
+        text=$(printf "$fmt" "$i")
+        if [[ "$mode" == json ]]; then
+            jq -cn --arg r "$text" '{type:"result",subtype:"success",is_error:false,result:$r,usage:{input_tokens:1,output_tokens:1}}' \
+                | queue_raw_response "$i" 0
+        else
+            printf '%s\n' "$text" | queue_raw_response "$i" 0
+        fi
+        queue_effect "$i" << 'EFFECT'
+awk 'done != 1 && /^- \[ \]/ { sub(/^- \[ \]/, "- [x]"); done = 1 } { print }' \
+    .ralph/fix_plan.md > .ralph/fix_plan.md.tmp && mv .ralph/fix_plan.md.tmp .ralph/fix_plan.md
+EFFECT
+    done
+}
+
+@test "E2E: PROGRESS: true (no file changes) keeps the breaker closed in a non-git CWD (#340)" {
+    _nongit_four_loops 'Posted PR review %d.\n\n---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nFILES_MODIFIED: 0\nPROGRESS: true\nEXIT_SIGNAL: false\n---END_RALPH_STATUS---'
+
+    run run_ralph
+
+    assert_equal "$(mock_call_count)" "4"
+    assert_equal "$(status_field exit_reason)" "plan_complete"
+}
+
+@test "E2E: text output mode honors the FILES_MODIFIED self-report in a non-git CWD (#340)" {
+    export CLAUDE_OUTPUT_FORMAT=text
+    _nongit_four_loops 'Committed to a sub-repo (loop %d).\n\n---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nFILES_MODIFIED: 2\nEXIT_SIGNAL: false\n---END_RALPH_STATUS---' text
+
+    run run_ralph
+
+    assert_equal "$(mock_call_count)" "4"
+    assert_equal "$(status_field exit_reason)" "plan_complete"
+}
+
+@test "E2E: in a git repo, a FILES_MODIFIED/PROGRESS claim without real changes does not hold the breaker open (#340)" {
+    # The maintainer accepted trusting self-reports ONLY where git can't see the
+    # work. In a git repo, git decides: a stuck model claiming progress every
+    # loop (and changing nothing) must still trip the breaker.
+    e2e_fix_plan 6 0
+    local i
+    for i in 1 2 3 4 5 6; do
+        jq -cn --arg r "$(printf 'Claimed work %d.\n\n---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nFILES_MODIFIED: 3\nPROGRESS: true\nEXIT_SIGNAL: false\n---END_RALPH_STATUS---' "$i")" \
+            '{type:"result",subtype:"success",is_error:false,result:$r,usage:{input_tokens:1,output_tokens:1}}' \
+            | queue_raw_response "$i" 0
+    done
+
+    run run_ralph
+
+    [ "$(mock_call_count)" -lt 6 ]
+    [[ "$(jq -r '.state' .ralph/.circuit_breaker_state)" == "OPEN" ]]
+}
+
+# =============================================================================
+# RALPH_DIR (Issue #352)
+# =============================================================================
+
+@test "E2E: an exported RALPH_DIR holds all state; .ralph/ is never created (#352)" {
+    e2e_fix_plan 1 0
+    mv .ralph .custom-ralph
+    export RALPH_DIR=.custom-ralph
+    queue_response 1 "IN_PROGRESS" "false" "Implemented the open task."
+    queue_effect 1 << 'EFFECT'
+echo "work" > src/work_1.txt
+git add src/work_1.txt
+sed -i 's/^- \[ \]/- [x]/' .custom-ralph/fix_plan.md
+EFFECT
+
+    run run_ralph
+
+    assert_success
+    assert_equal "$(mock_call_count)" "1"
+    [ -f .custom-ralph/status.json ]
+    [ -f .custom-ralph/.call_count ]
+    [ -f .custom-ralph/.circuit_breaker_state ]
+    [ ! -e .ralph ]
+}

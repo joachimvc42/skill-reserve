@@ -1,0 +1,47 @@
+name: Deploy Site
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/deploy-site.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        working-directory: site
+        # --ignore-scripts blocks dependency lifecycle scripts from running in
+        # CI. Nothing in this tree needs a postinstall step, so the build is
+        # unaffected and a compromised transitive dep cannot execute here.
+        run: npm ci --legacy-peer-deps --ignore-scripts
+      - name: Build site
+        working-directory: site
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v5
+        id: deployment

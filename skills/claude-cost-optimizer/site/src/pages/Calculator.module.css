@@ -1,0 +1,266 @@
+.calculator {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.title {
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+
+/* Phones and tablets: config first, then the report. Desktop: config is a sticky rail beside it. */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (min-width: 960px) {
+  .grid {
+    grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
+  }
+
+  .inputPanel {
+    position: sticky;
+    top: 4.5rem;
+    max-height: calc(100vh - 5.5rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+/* Input Panel */
+
+.inputPanel {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .inputPanel {
+    padding: 1rem;
+  }
+}
+
+.panelTitle {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  min-width: 0;
+}
+
+.legend {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 0.5rem;
+}
+
+.radioGroup {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.4rem;
+}
+
+.radioLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0.5rem 0.6rem;
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: border-color 0.15s, background-color 0.15s, transform 0.15s;
+}
+
+.radioLabel:hover {
+  border-color: var(--text-muted);
+}
+
+.radioLabel:active {
+  transform: scale(0.98);
+}
+
+.radioLabel:has(.radio:checked) {
+  border-color: var(--accent-blue);
+  background-color: var(--surface-hover);
+}
+
+.radioLabel:has(.radio:focus-visible) {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.radio {
+  margin-top: 0.2rem;
+  accent-color: var(--accent-blue);
+}
+
+.radioText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.radioMeta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.inputGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+@media (max-width: 360px) {
+  .inputGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.inputLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.numberInput {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.9rem;
+  transition: border-color 0.15s;
+}
+
+.numberInput:hover {
+  border-color: var(--text-muted);
+}
+
+.numberInput:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 40px;
+  font-size: 0.9rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.checkbox {
+  accent-color: var(--accent-blue);
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+/* Report column: a stack of cards that rise in one after another. */
+
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+/* backwards, not both: after the entrance the cards keep their own hover transforms. */
+.report > * {
+  animation: rise 560ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+.report > :nth-child(2) {
+  animation-delay: 80ms;
+}
+
+.report > :nth-child(3) {
+  animation-delay: 160ms;
+}
+
+.report > :nth-child(4) {
+  animation-delay: 240ms;
+}
+
+.report > :nth-child(5) {
+  animation-delay: 320ms;
+}
+
+.report > :nth-child(6) {
+  animation-delay: 400ms;
+}
+
+.report > :nth-child(7) {
+  animation-delay: 480ms;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Copy Button */
+
+.copyButton {
+  min-height: 44px;
+  padding: 0.6rem 1.25rem;
+  background-color: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: border-color 0.15s, background-color 0.15s, transform 0.15s;
+  align-self: flex-start;
+}
+
+.copyButton:hover {
+  border-color: var(--accent-blue);
+  background-color: var(--surface-hover);
+}
+
+.copyButton:active {
+  transform: scale(0.97);
+}

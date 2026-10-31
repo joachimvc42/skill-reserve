@@ -1,0 +1,1963 @@
+#!/usr/bin/env python3
+"""
+claude-rate -- Local Claude / AI setup rater.
+
+Scans your project directory and rates your Claude Code (and adjacent AI
+tooling) configuration for cost-efficiency. Returns a 0-100 score, an A+
+to F letter grade, a per-category breakdown, copy-pasteable fix suggestions,
+and an estimated monthly spend on every active model tier.
+
+Unlike the deployed web analyzer (which only sees what's on GitHub),
+claude-rate runs on the actual filesystem and can inspect things the
+analyzer can't see -- e.g. real MCP server count, .mcp.json contents, hook
+configurations, accidentally-committed secrets, .gitignore coverage of
+sensitive files, and untracked CLAUDE.md drafts.
+
+Usage:
+    python rate.py                       # rate the current directory
+    python rate.py /path/to/project
+    python rate.py . --json              # machine-readable output
+    python rate.py . --fix               # print copy-pasteable fix commands
+    python rate.py . --strict            # fail with exit code 1 if grade < B
+
+No external dependencies. Pure Python 3.10+ stdlib.
+
+Pricing data verified 2026-10-09 against:
+    https://platform.claude.com/docs/en/about-claude/pricing
+    https://platform.claude.com/docs/en/about-claude/models/overview
+    https://platform.claude.com/docs/en/models/haiku-5-5/overview
+    https://platform.claude.com/docs/en/models/sonnet-5-5/overview
+    https://platform.claude.com/docs/en/models/opus-5-5/overview
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# -- Pricing data (mirrors site/src/utils/pricing.ts) ------------------------
+
+# Models priced as of 2026-10-09. Prices are USD per 1M tokens.
+# `fast_mode` marks the models that honor `speed: "fast"` (a flat 2x of the
+# model's own base on both input and output). Since Opus 5.5's release on
+# 2026-09-22 that is Opus 5.5, Opus 5 and Opus 4.8 only: Opus 4.7 errors on
+# `speed: "fast"`, and Opus 4.6 silently downgrades to standard speed at
+# standard rates. The old 6x tier no longer exists.
+# `cache_hit` has three multipliers: 0.1x input on most models, 0.05x on
+# Opus 5.5 ($0.20/MTok) and Sonnet 5.5 ($0.10/MTok since 2026-10-07), and 0.025x
+# on Fable 5.1 / Mythos 5.1 ($0.25/MTok) -- read the field, never recompute it as
+# input * 0.1.
+# `long_prompt` (Haiku 5.5 only) is a second price tier: a request whose prompt,
+# cache reads and writes included, is over `threshold` tokens pays those rates on
+# the whole request.
+MODELS: dict[str, dict[str, Any]] = {
+    "fable-5-1": {
+        "name": "Fable 5.1",
+        "input": 10.00,
+        "output": 50.00,
+        "cache_hit": 0.25,
+        "cache_5m_write": 12.50,
+        "cache_1h_write": 20.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": False,
+        "lifecycle": "active",
+    },
+    "fable-5": {
+        "name": "Fable 5",
+        "input": 10.00,
+        "output": 50.00,
+        "cache_hit": 1.00,
+        "cache_5m_write": 12.50,
+        "cache_1h_write": 20.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": False,
+        "lifecycle": "legacy",
+    },
+    # $4/$20 -- 20% below Opus 5 (Opus 4.5 made the earlier cut, $15/$75 to $5/$25).
+    "opus-5-5": {
+        "name": "Opus 5.5",
+        "input": 4.00,
+        "output": 20.00,
+        "cache_hit": 0.20,
+        "cache_5m_write": 5.00,
+        "cache_1h_write": 8.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": True,
+        "lifecycle": "active",
+    },
+    "opus-5": {
+        "name": "Opus 5",
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "cache_5m_write": 6.25,
+        "cache_1h_write": 10.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": True,
+        "lifecycle": "legacy",
+    },
+    "opus-4-8": {
+        "name": "Opus 4.8",
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "cache_5m_write": 6.25,
+        "cache_1h_write": 10.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": True,
+        "lifecycle": "legacy",
+    },
+    "opus-4-7": {
+        "name": "Opus 4.7",
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "cache_5m_write": 6.25,
+        "cache_1h_write": 10.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": False,
+        "lifecycle": "legacy",
+    },
+    "opus-4-6": {
+        "name": "Opus 4.6",
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "cache_5m_write": 6.25,
+        "cache_1h_write": 10.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.0,
+        "fast_mode": False,
+        "lifecycle": "legacy",
+    },
+    # Same $2/$10 and tokenizer as Sonnet 5; the cache floor drops to 512 tokens,
+    # and the cache read was cut to $0.10 (0.05x) on 2026-10-07.
+    "sonnet-5-5": {
+        "name": "Sonnet 5.5",
+        "input": 2.00,
+        "output": 10.00,
+        "cache_hit": 0.10,
+        "cache_5m_write": 2.50,
+        "cache_1h_write": 4.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": False,
+        "lifecycle": "active",
+    },
+    # $2/$10 became the permanent standard price on 2026-09-01; the scheduled
+    # increase to $3/$15 was cancelled.
+    "sonnet-5": {
+        "name": "Sonnet 5",
+        "input": 2.00,
+        "output": 10.00,
+        "cache_hit": 0.20,
+        "cache_5m_write": 2.50,
+        "cache_1h_write": 4.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": False,
+        "lifecycle": "legacy",
+    },
+    "sonnet-4-6": {
+        "name": "Sonnet 4.6",
+        "input": 3.00,
+        "output": 15.00,
+        "cache_hit": 0.30,
+        "cache_5m_write": 3.75,
+        "cache_1h_write": 6.00,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.0,
+        "fast_mode": False,
+        "lifecycle": "legacy",
+    },
+    # Tiered: $0.10/$0.50 up to 100,000 prompt tokens, $0.50/$2.50 above.
+    "haiku-5-5": {
+        "name": "Haiku 5.5",
+        "input": 0.10,
+        "output": 0.50,
+        "cache_hit": 0.01,
+        "cache_5m_write": 0.125,
+        "cache_1h_write": 0.20,
+        "context_window": 1_000_000,
+        "tokenizer_overhead": 1.3,
+        "fast_mode": False,
+        "lifecycle": "active",
+        "long_prompt": {
+            "threshold": 100_000,
+            "input": 0.50,
+            "output": 2.50,
+            "cache_hit": 0.05,
+            "cache_5m_write": 0.625,
+            "cache_1h_write": 1.00,
+        },
+    },
+    "haiku-4-5": {
+        "name": "Haiku 4.5",
+        "input": 1.00,
+        "output": 5.00,
+        "cache_hit": 0.10,
+        "cache_5m_write": 1.25,
+        "cache_1h_write": 2.00,
+        "context_window": 200_000,
+        "tokenizer_overhead": 1.0,
+        "fast_mode": False,
+        "lifecycle": "legacy",
+    },
+}
+
+# Token estimation constants (mirrors TOKEN_ESTIMATES in pricing.ts).
+TOKENS_PER_CLAUDE_MD_LINE = 10
+SYSTEM_PROMPT_TOKENS = 3_500
+# Worst case: full schemas with MCP tool search off. With tool search on (the
+# default) a server adds only its tool names and instructions, so this overstates.
+TOKENS_PER_MCP_SERVER = 1_500
+TOKENS_PER_FILE_READ = 2_000
+OUTPUT_TOKENS_PER_TURN = 500
+HISTORY_GROWTH_PER_TURN = 1_500
+
+# CLAUDE.md loads in full at launch; there is no character cap. Anthropic's
+# guidance is to "target under 200 lines per CLAUDE.md file. Longer files
+# consume more context and reduce adherence." So size is scored on the primary
+# file's line count plus estimated tokens (chars / 4) across both files.
+CLAUDE_MD_LINE_GUIDANCE = 200
+
+# Repeated path/filename literals -- declared once so the rater only has one
+# place to update if Anthropic changes a convention.
+CLAUDE_MD = "CLAUDE.md"
+DOT_CLAUDE = ".claude"
+SETTINGS_JSON = "settings.json"
+SETTINGS_LOCAL_JSON = "settings.local.json"
+MCP_JSON = ".mcp.json"
+GITIGNORE = ".gitignore"
+# Claude Code does not read this file. It is detected only so the rater can
+# say so and convert its patterns into Read deny rules.
+IGNORE_FILE = ".claudeignore"
+IGNORE_FILE_FINDING = (
+    "`.claudeignore` is not read by Claude Code -- it appears nowhere in Claude "
+    "Code's documentation. Move its patterns into permissions.deny as Read(...) rules."
+)
+
+# Lock files at the project root that the Read deny rules should cover.
+LOCKFILE_NAMES = (
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "poetry.lock",
+    "Cargo.lock",
+    "uv.lock",
+)
+LOCK_GLOB = "*.lock"
+LOCK_WILDCARD = "*lock*"
+
+# A permissions.deny entry that keeps Claude's file tools out of a path.
+READ_RULE = re.compile(r"Read\(.+\)")
+
+# Indentation prefix used in copy-pasteable fix output.
+FIX_INDENT = "\n    "
+
+# Grade thresholds expressed as (min_percent, letter) sorted descending --
+# table-driven so total_to_grade is a simple linear scan and Sonar can't
+# flag the chain as "always-false".
+GRADE_TABLE: tuple[tuple[float, str], ...] = (
+    (95, "A+"),
+    (85, "A"),
+    (70, "B"),
+    (55, "C"),
+    (40, "D"),
+)
+
+
+# -- ANSI colors -------------------------------------------------------------
+
+
+def _supports_color() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    if not hasattr(sys.stdout, "isatty"):
+        return False
+    return sys.stdout.isatty()
+
+
+_C = _supports_color()
+BOLD = "\033[1m" if _C else ""
+DIM = "\033[2m" if _C else ""
+RESET = "\033[0m" if _C else ""
+GREEN = "\033[32m" if _C else ""
+YELLOW = "\033[33m" if _C else ""
+RED = "\033[31m" if _C else ""
+CYAN = "\033[36m" if _C else ""
+BLUE = "\033[34m" if _C else ""
+MAGENTA = "\033[35m" if _C else ""
+
+
+# -- Data classes ------------------------------------------------------------
+
+
+@dataclass
+class CategoryResult:
+    name: str
+    score: int
+    max_score: int
+    detail: str
+    findings: list[str] = field(default_factory=list)
+    fixes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RateResult:
+    project: str
+    score: int
+    max_score: int
+    grade: str
+    categories: list[CategoryResult]
+    cost_estimate: dict[str, dict[str, float]]
+    badge_url: str
+    badge_markdown: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "project": self.project,
+            "score": self.score,
+            "max_score": self.max_score,
+            "grade": self.grade,
+            "badge_url": self.badge_url,
+            "badge_markdown": self.badge_markdown,
+            "categories": [
+                {
+                    "name": c.name,
+                    "score": c.score,
+                    "max_score": c.max_score,
+                    "detail": c.detail,
+                    "findings": c.findings,
+                    "fixes": c.fixes,
+                }
+                for c in self.categories
+            ],
+            "cost_estimate": self.cost_estimate,
+        }
+
+
+# -- Helpers -----------------------------------------------------------------
+
+
+def _read_text(root: Path, relative: str | Path) -> str | None:
+    """Read a file under `root`, rejecting any path that escapes the project."""
+    base = root.resolve()
+    candidate = (base / relative).resolve()
+    if not candidate.is_relative_to(base):
+        return None
+    try:
+        return candidate.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _read_json(root: Path, relative: str | Path) -> dict[str, Any] | None:
+    text = _read_text(root, relative)
+    if text is None:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _line_count(text: str) -> int:
+    return len(text.splitlines())
+
+
+def _char_count(text: str) -> int:
+    return len(text)
+
+
+def _glob_count(project: Path, patterns: tuple[str, ...]) -> int:
+    total = 0
+    for pat in patterns:
+        total += sum(1 for _ in project.glob(pat))
+    return total
+
+
+# -- Category scorers --------------------------------------------------------
+
+# Primary file line count -> (max_lines, points, label). Over 500 lines scores 1.
+_PRIMARY_TIERS: tuple[tuple[int, int, str], ...] = (
+    (100, 12, "concise"),
+    (CLAUDE_MD_LINE_GUIDANCE, 10, "within the 200-line guidance"),
+    (300, 6, "over the 200-line guidance"),
+    (500, 3, "well over the 200-line guidance"),
+)
+# Estimated tokens across both files -> (max_tokens, points). Over 16,000 scores 0.
+_TOTAL_TIERS: tuple[tuple[int, int], ...] = (
+    (2_000, 8),
+    (4_000, 6),
+    (8_000, 4),
+    (16_000, 2),
+)
+
+
+def _gather_claude_md(project: Path) -> tuple[int, int, int]:
+    """Return (primary_lines, total_chars, file_count) for CLAUDE.md files.
+
+    Primary is the root CLAUDE.md, or .claude/CLAUDE.md when the root has none.
+    """
+    texts = [
+        _read_text(project, relative) or ""
+        for relative in (Path(CLAUDE_MD), Path(DOT_CLAUDE) / CLAUDE_MD)
+        if (project / relative).is_file()
+    ]
+    primary_lines = _line_count(texts[0]) if texts else 0
+    return primary_lines, sum(_char_count(t) for t in texts), len(texts)
+
+
+def _score_tier(value: int, tiers: tuple, default: tuple) -> tuple:
+    """Pick the first tier whose threshold is >= value, else fall back."""
+    for tier in tiers:
+        if value <= tier[0]:
+            return tier
+    return default
+
+
+def score_claude_md(project: Path) -> CategoryResult:
+    """CLAUDE.md presence, primary line count, and estimated tokens across files."""
+    cat = CategoryResult(
+        name=CLAUDE_MD, score=0, max_score=20, detail="", findings=[], fixes=[]
+    )
+    primary_lines, total_chars, file_count = _gather_claude_md(project)
+
+    if file_count == 0:
+        cat.detail = f"{CLAUDE_MD} not found"
+        cat.findings.append(f"No {CLAUDE_MD} at project root.")
+        cat.fixes.append(
+            f"Create {CLAUDE_MD} at the repo root with project conventions, "
+            "tech stack, and 5-10 high-value rules. Keep it under 200 lines "
+            "(Anthropic's guidance)."
+        )
+        return cat
+
+    total_tokens = math.ceil(total_chars / 4)
+
+    # Primary file line count (max 12 points).
+    primary_tier = _score_tier(
+        primary_lines, _PRIMARY_TIERS, (0, 1, "far over the 200-line guidance")
+    )
+    primary_score = primary_tier[1]
+    primary_msg = primary_tier[2]
+
+    # Estimated tokens across both files (max 8 points).
+    total_tier = _score_tier(total_tokens, _TOTAL_TIERS, (0, 0))
+    total_score = total_tier[1]
+
+    cat.score = primary_score + total_score
+    cat.detail = (
+        f"{primary_lines:,} lines primary ({primary_msg}); "
+        f"~{total_tokens:,} tokens total across {file_count} file(s)"
+    )
+
+    _add_claude_md_findings(cat, primary_lines, total_tokens)
+    return cat
+
+
+def _add_claude_md_findings(
+    cat: CategoryResult, primary_lines: int, total_tokens: int
+) -> None:
+    """Attach findings/fixes to a CLAUDE.md result based on size thresholds."""
+    if primary_lines > CLAUDE_MD_LINE_GUIDANCE:
+        cat.findings.append(
+            f"{primary_lines} lines -- over Anthropic's 200-line guidance for CLAUDE.md. "
+            "Longer files consume more context and reduce adherence. Move "
+            "workflow-specific instructions into skills or path-scoped .claude/rules/ "
+            "so they load on demand."
+        )
+        cat.fixes.append(
+            f"Trim {CLAUDE_MD} to under 200 lines. Move workflow-specific instructions "
+            "(PR reviews, DB migrations) into skills, and directory-specific rules into "
+            f"{DOT_CLAUDE}/rules/ with `paths:` frontmatter."
+        )
+
+    if total_tokens > _TOTAL_TIERS[0][0]:
+        cat.fixes.append(
+            f"Your {CLAUDE_MD} files total ~{total_tokens:,} tokens and load in full at "
+            "the start of every session. Delete duplication and drop low-value rules; "
+            "2,000 tokens or fewer scores full marks."
+        )
+
+
+_READ_RULE_TIERS: tuple[tuple[int, int], ...] = (
+    # (min_rule_count, points)
+    (10, 13),
+    (5, 10),
+    (1, 6),
+)
+
+# The Read deny block suggested when a project has none (fact sheet 3a).
+_DEFAULT_READ_DENY: tuple[str, ...] = (
+    "Read(./node_modules/**)",
+    "Read(./dist/**)",
+    "Read(./build/**)",
+    "Read(./coverage/**)",
+    "Read(./.env)",
+    "Read(./.env.*)",
+    "Read(*.min.js)",
+    "Read(./package-lock.json)",
+)
+
+
+def _read_deny_rules(settings: dict[str, Any] | None) -> list[str]:
+    """Entries of permissions.deny that are Read(...) rules."""
+    perms = (settings or {}).get("permissions")
+    deny = perms.get("deny") if isinstance(perms, dict) else None
+    if not isinstance(deny, list):
+        return []
+    return [r for r in deny if isinstance(r, str) and READ_RULE.fullmatch(r)]
+
+
+def _lock_covered(lock: str, rules: list[str]) -> bool:
+    return any(lock in r or LOCK_GLOB in r or LOCK_WILDCARD in r for r in rules)
+
+
+def _ignore_file_as_read_rules(project: Path) -> list[str]:
+    """Convert each ignore-file pattern to a Read deny rule.
+
+    `dir/` -> Read(./dir/**); a pattern containing `/` elsewhere -> Read(./pattern)
+    with any leading `/` stripped; a bare name or glob -> Read(pattern), which
+    matches at any depth. Blank lines, comments and `!` negations are skipped.
+    """
+    rules: list[str] = []
+    for line in (_read_text(project, IGNORE_FILE) or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith(("#", "!")):
+            continue
+        if s.endswith("/"):
+            rules.append(f"Read(./{s[:-1].removeprefix('/')}/**)")
+        elif "/" in s:
+            rules.append(f"Read(./{s.removeprefix('/')})")
+        else:
+            rules.append(f"Read({s})")
+    return rules
+
+
+def _deny_block(rules: list[str] | tuple[str, ...]) -> str:
+    """A copy-pasteable permissions.deny JSON block, indented for fix output."""
+    text = json.dumps({"permissions": {"deny": list(rules)}}, indent=2)
+    return FIX_INDENT + FIX_INDENT.join(text.splitlines())
+
+
+def _file_read_detail(count: int, locks: list[str], uncovered: list[str]) -> str:
+    if count == 0:
+        return "no Read deny rules in permissions.deny"
+    if not locks:
+        lock_note = "no lock files at root"
+    elif uncovered:
+        lock_note = "lock files not covered: " + ", ".join(uncovered)
+    else:
+        lock_note = "lock files covered"
+    return f"{count} Read deny rule(s); {lock_note}"
+
+
+def score_file_read_exclusions(project: Path) -> CategoryResult:
+    """Read(...) rules in permissions.deny, plus lock-file coverage."""
+    cat = CategoryResult(
+        name="File-read exclusions",
+        score=0,
+        max_score=15,
+        detail="",
+        findings=[],
+        fixes=[],
+    )
+    settings, _ = _load_settings(project)
+    rules = _read_deny_rules(settings)
+    count = len(rules)
+    locks = [lock for lock in LOCKFILE_NAMES if (project / lock).is_file()]
+    uncovered = [lock for lock in locks if not _lock_covered(lock, rules)]
+
+    score = next((pts for minimum, pts in _READ_RULE_TIERS if count >= minimum), 0)
+    if count >= 1 and not uncovered:
+        score += 2
+    cat.score = min(score, cat.max_score)
+    cat.detail = _file_read_detail(count, locks, uncovered)
+
+    if (project / IGNORE_FILE).is_file():
+        cat.findings.append(IGNORE_FILE_FINDING)
+        cat.fixes.append(
+            f"Merge its patterns into permissions.deny in {DOT_CLAUDE}/{SETTINGS_JSON}, "
+            f"then delete {IGNORE_FILE}:"
+            + _deny_block(_ignore_file_as_read_rules(project))
+        )
+    elif count == 0:
+        cat.fixes.append(
+            "Keep Claude's file tools out of dependency, build and generated paths with "
+            f"Read deny rules in {DOT_CLAUDE}/{SETTINGS_JSON}. No published measurement "
+            "exists for what they save; the effect depends on how often Claude would "
+            "otherwise open those files:" + _deny_block(_DEFAULT_READ_DENY)
+        )
+
+    if count >= 1 and uncovered:
+        cat.fixes.append(
+            "Add a Read deny rule for each lock file at the repo root:"
+            + FIX_INDENT
+            + FIX_INDENT.join(f'"Read(./{lock})"' for lock in uncovered)
+        )
+
+    return cat
+
+
+_MODEL_KEYS: tuple[str, ...] = ("model", "defaultModel", "preferredModel")
+
+# This sub-score used to award 5 of this category's 15 points for any of
+# budgetCap / costLimit / maxCost / maxMonthlyCost / maxCostPerSession / budget.
+# All six were checked against https://www.schemastore.org/claude-code-settings.json
+# on 2026-09-06: none of them appears among the schema's 142 top-level
+# properties. Claude Code has no monthly spend cap setting at all, so a third of
+# the category was going to keys the product silently ignores, and the fix text
+# told users to add one.
+#
+# The points now go to settings Claude Code really reads that bound spend. Each
+# entry is value-aware on purpose: the key being present is not enough, because
+# "fastMode": true doubles the bill and "effortLevel": "max" raises it.
+
+
+def _cost_control_signals(data: dict[str, Any]) -> list[str]:
+    """Real settings whose configured value reduces or bounds spend."""
+    signals: list[str] = []
+
+    # Reasoning tokens bill at the output rate, and effort defaults to "high",
+    # so pinning it below that is the largest lever here after model choice.
+    effort = data.get("effortLevel")
+    if isinstance(effort, str) and effort.strip().lower() in ("low", "medium"):
+        signals.append(f'effortLevel="{effort}"')
+
+    # Fast Mode is a flat 2x on input and output. Declining it explicitly is a
+    # real saving; leaving it on is the thing to warn about.
+    if data.get("fastMode") is False:
+        signals.append("fastMode=false")
+
+    if data.get("alwaysThinkingEnabled") is False:
+        signals.append("alwaysThinkingEnabled=false")
+
+    # The closest real analogue of a spend cap: an enforced allowlist can keep
+    # Opus- and Fable-tier models out of a project entirely.
+    models = data.get("availableModels")
+    if (
+        data.get("enforceAvailableModels") is True
+        and isinstance(models, list)
+        and models
+    ):
+        signals.append(f"enforceAvailableModels over {len(models)} model(s)")
+
+    # Bounds context growth, which is what actually drives per-turn input cost.
+    if data.get("autoCompactEnabled") is True:
+        signals.append("autoCompactEnabled=true")
+
+    return signals
+
+
+def _settings_category_label() -> str:
+    return f"{DOT_CLAUDE}/{SETTINGS_JSON}"
+
+
+def _load_settings(project: Path) -> tuple[dict[str, Any] | None, Path | None]:
+    """Find the first readable settings.json variant under .claude/."""
+    for filename in (SETTINGS_JSON, SETTINGS_LOCAL_JSON):
+        relative = Path(DOT_CLAUDE) / filename
+        data = _read_json(project, relative)
+        if data is not None:
+            return data, project / relative
+    return None, None
+
+
+def _settings_features(
+    data: dict[str, Any],
+) -> tuple[bool, list[str], bool, str | None]:
+    """Return (has_model, cost_control_signals, has_perms, model_id)."""
+    model_id = next((data.get(k) for k in _MODEL_KEYS if data.get(k)), None)
+    has_model = bool(model_id)
+    cost_signals = _cost_control_signals(data)
+    perms = data.get("permissions") or {}
+    has_perms = (
+        bool(perms.get("allow") or perms.get("deny"))
+        if isinstance(perms, dict)
+        else False
+    )
+    return (
+        has_model,
+        cost_signals,
+        has_perms,
+        model_id if isinstance(model_id, str) else None,
+    )
+
+
+def score_settings(project: Path) -> CategoryResult:
+    """`.claude/settings.json` model pin + real cost controls + permissions."""
+    cat = CategoryResult(
+        name=_settings_category_label(),
+        score=0,
+        max_score=15,
+        detail="",
+        findings=[],
+        fixes=[],
+    )
+    data, found_path = _load_settings(project)
+
+    if data is None:
+        cat.detail = f"no {SETTINGS_JSON}"
+        cat.findings.append(
+            f"No {DOT_CLAUDE}/{SETTINGS_JSON}. Default model and permissions are not project-pinned."
+        )
+        cat.fixes.append(
+            f"Create {DOT_CLAUDE}/{SETTINGS_JSON} with at minimum:\n"
+            '    {"model": "claude-sonnet-5-5", "permissions": {"allow": [], "deny": []}}\n'
+            "    Reach for claude-opus-5-5 only on complex agentic work -- its adaptive "
+            "thinking is always on (it cannot be disabled) and reasoning tokens bill as "
+            "output at $20/1M, so effort is the only lever; it defaults to medium."
+        )
+        return cat
+
+    has_model, cost_signals, has_perms, model_id = _settings_features(data)
+    score = 0
+    parts: list[str] = []
+
+    if has_model:
+        score += 6
+        parts.append(f"model={model_id}")
+    else:
+        cat.fixes.append(
+            f'Set "model" in {SETTINGS_JSON} to pin a default (e.g. "claude-sonnet-5-5"). '
+            "Prevents accidental Opus usage on simple tasks -- and on Opus 5.5 that matters "
+            "more, since adaptive thinking is always on and every reasoning token "
+            "bills at the $20/1M output rate."
+        )
+
+    if cost_signals:
+        score += 5
+        parts.append("cost controls: " + ", ".join(cost_signals))
+    else:
+        cat.fixes.append(
+            "No cost controls in settings.json. Claude Code has no monthly spend "
+            "cap setting -- keys like maxMonthlyCost or budgetCap are not in the "
+            "settings schema and are silently ignored, so adding one buys nothing. "
+            "Use settings it actually reads:\n"
+            '    "effortLevel": "medium"          reasoning tokens bill as output\n'
+            '    "fastMode": false                declines the flat 2x Fast Mode '
+            "multiplier\n"
+            '    "autoCompactEnabled": true       bounds the context growth that '
+            "drives input cost\n"
+            '    "enforceAvailableModels": true with "availableModels": '
+            '["claude-sonnet-5-5"]  keeps Opus- and Fable-tier models out entirely\n'
+            "    For an actual spend ceiling you need a PreToolUse hook, not a "
+            "setting -- see hooks/budget-tracker.sh in this repo."
+        )
+
+    if has_perms:
+        score += 4
+        parts.append("permissions defined")
+    else:
+        cat.fixes.append(
+            "Define permissions to reduce permission-prompt friction:\n"
+            '    "permissions": {"allow": ["Bash(npm test:*)", "Read(**)"], "deny": []}'
+        )
+
+    cat.score = score
+    if parts and found_path is not None:
+        cat.detail = f"found at {found_path.relative_to(project)}; " + ", ".join(parts)
+    else:
+        cat.detail = f"{SETTINGS_JSON} present but mostly empty"
+    return cat
+
+
+_MCP_TIERS: tuple[tuple[int, int, str], ...] = (
+    # (max_count, score, detail_template) -- detail uses {n} for total.
+    (3, 13, "{n} MCP server(s) -- light overhead"),
+    (5, 10, "{n} MCP servers -- moderate overhead"),
+    (8, 6, "{n} MCP servers -- heavy overhead"),
+    (12, 3, "{n} MCP servers -- very heavy overhead"),
+)
+
+
+def _count_mcp_servers(project: Path) -> tuple[dict[str, int], dict[str, Any] | None]:
+    """Return ({source_label: count}, settings_dict_or_None)."""
+    counts: dict[str, int] = {}
+
+    mcp_data = _read_json(project, MCP_JSON)
+    if mcp_data is not None and isinstance(mcp_data.get("mcpServers"), dict):
+        counts[MCP_JSON] = len(mcp_data["mcpServers"])
+
+    settings = _read_json(project, Path(DOT_CLAUDE) / SETTINGS_JSON)
+    if settings is not None:
+        servers = settings.get("mcpServers", {})
+        if isinstance(servers, dict) and servers:
+            counts[f"{DOT_CLAUDE}/{SETTINGS_JSON}"] = len(servers)
+
+    return counts, settings
+
+
+def score_mcp_servers(project: Path) -> CategoryResult:
+    """Count MCP servers across .mcp.json + settings.json."""
+    cat = CategoryResult(
+        name="MCP servers", score=0, max_score=15, detail="", findings=[], fixes=[]
+    )
+    counts, settings = _count_mcp_servers(project)
+    total = sum(counts.values())
+
+    if total == 0:
+        cat.score = 15
+        cat.detail = "no MCP servers configured (lowest overhead)"
+        return cat
+
+    cat.score, cat.detail = 0, f"{total} MCP servers -- excessive overhead"
+    for max_count, score_value, template in _MCP_TIERS:
+        if total <= max_count:
+            cat.score = score_value
+            cat.detail = template.format(n=total)
+            break
+
+    if total > 5:
+        cat.findings.append(
+            f"{total} MCP servers configured (across {', '.join(counts.keys())}). "
+            "With tool search on (the default), each adds its tool names and server "
+            "instructions to context; full tool schemas load up front only when tool "
+            "search is off (ENABLE_TOOL_SEARCH=false or a custom ANTHROPIC_BASE_URL)."
+        )
+        cat.fixes.append(
+            "Review which MCP servers you actually use every session. Disable unused "
+            f"ones with /mcp or in {MCP_JSON}, and move personal ones to local scope "
+            "(claude mcp add --scope local, stored in ~/.claude.json) so they load only "
+            "for you. "
+            "Prefer CLI tools (gh, aws, gcloud, sentry-cli) where they exist -- they add "
+            "no per-tool listing."
+        )
+
+    if total > 0 and MCP_JSON not in counts and "mcpServers" in (settings or {}):
+        cat.fixes.append(
+            f"MCP servers are in {DOT_CLAUDE}/{SETTINGS_JSON} -- prefer the dedicated "
+            f"{MCP_JSON} file (cleaner separation, easier to share/exclude)."
+        )
+
+    return cat
+
+
+def score_hooks(project: Path) -> CategoryResult:
+    """Hooks for budget tracking, cost logging, or permission policy."""
+    cat = CategoryResult(
+        name="Hooks", score=0, max_score=10, detail="", findings=[], fixes=[]
+    )
+
+    settings = _read_json(project, Path(DOT_CLAUDE) / SETTINGS_JSON)
+    hooks = settings.get("hooks") if settings else None
+    hook_count = _count_hook_entries(hooks)
+
+    if hook_count >= 3:
+        cat.score = 10
+        cat.detail = f"{hook_count} hook(s) configured"
+    elif hook_count >= 1:
+        cat.score = 6
+        cat.detail = f"{hook_count} hook(s) configured"
+        cat.fixes.append(
+            "Consider adding cost-tracking hooks (PreToolUse for budget gates, Stop for session-cost summary)."
+        )
+    else:
+        cat.detail = "no hooks configured"
+        cat.fixes.append(
+            "Add cost-tracking hooks. Example PostToolUse hook to log token use:\n"
+            '    {"hooks": {"PostToolUse": [{"command": "echo \\"$CLAUDE_TOOL_NAME: '
+            '$CLAUDE_TOKEN_COUNT tokens\\" >> ~/.claude-usage.log"}]}}'
+        )
+
+    return cat
+
+
+def _count_hook_entries(hooks: Any) -> int:
+    """Count individual hook entries in a settings.hooks dict."""
+    if not isinstance(hooks, dict):
+        return 0
+    count = 0
+    for value in hooks.values():
+        if isinstance(value, list):
+            count += len(value)
+        elif value:
+            count += 1
+    return count
+
+
+_DANGER_FILES: tuple[str, ...] = (
+    ".env",
+    ".env.local",
+    ".env.production",
+    "credentials.json",
+    ".mcp.local.json",
+)
+_API_KEY_PATTERN = re.compile(
+    r"(sk-[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36})"
+)
+
+
+def _gitignore_lines(project: Path) -> list[str]:
+    """Return non-empty .gitignore lines, or an empty list if missing."""
+    path = project / GITIGNORE
+    if not path.is_file():
+        return []
+    text = _read_text(project, GITIGNORE) or ""
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _is_gitignored(filename: str, gitignore_lines: list[str]) -> bool:
+    """True if the gitignore lines plausibly cover `filename`."""
+    target = filename.rstrip("/")
+    return any(
+        filename in line or line.rstrip("/") == target for line in gitignore_lines
+    )
+
+
+def _find_leaked_files(project: Path, gitignore_lines: list[str]) -> list[str]:
+    """Sensitive files that exist on disk but aren't in .gitignore."""
+    leaked: list[str] = []
+    for filename in _DANGER_FILES:
+        if (project / filename).is_file() and not _is_gitignored(
+            filename, gitignore_lines
+        ):
+            leaked.append(filename)
+    return leaked
+
+
+def _find_api_key_leaks(project: Path) -> list[str]:
+    """Files in the repo that contain an obvious API key pattern."""
+    suspects: list[str] = []
+    targets = (
+        Path(CLAUDE_MD),
+        Path(DOT_CLAUDE) / SETTINGS_JSON,
+        Path(MCP_JSON),
+    )
+    for relative in targets:
+        target = project / relative
+        if not target.is_file():
+            continue
+        text = _read_text(project, relative) or ""
+        if _API_KEY_PATTERN.search(text):
+            suspects.append(str(target.relative_to(project)))
+    return suspects
+
+
+def score_security(project: Path) -> CategoryResult:
+    """Quick check for accidentally-committed secrets and missing gitignore entries."""
+    cat = CategoryResult(
+        name="Security & hygiene",
+        score=0,
+        max_score=10,
+        detail="",
+        findings=[],
+        fixes=[],
+    )
+
+    gitignore_lines = _gitignore_lines(project)
+    has_gitignore = bool(gitignore_lines) or (project / GITIGNORE).is_file()
+    leaked = _find_leaked_files(project, gitignore_lines)
+    suspect_files = _find_api_key_leaks(project)
+
+    score = 10
+    if leaked:
+        score -= 6
+        cat.findings.append(
+            f"Sensitive files exist on disk but are NOT in {GITIGNORE}: {', '.join(leaked)}. "
+            "These will be committed unless explicitly ignored."
+        )
+        cat.fixes.append(
+            f"Add to {GITIGNORE} IMMEDIATELY:"
+            + FIX_INDENT
+            + FIX_INDENT.join(leaked + [".env*", "*.key", ".mcp.local.json"])
+        )
+
+    if suspect_files:
+        score = 0
+        cat.findings.append(
+            f"POSSIBLE API KEY in tracked files: {', '.join(suspect_files)}. "
+            "Rotate the key immediately and remove from git history."
+        )
+        cat.fixes.append(
+            "1. Rotate the leaked credential at the provider.\n"
+            "    2. Remove from the file.\n"
+            "    3. Use git-filter-repo or BFG to scrub history.\n"
+            "    4. Force-push (coordinate with team first)."
+        )
+
+    if not has_gitignore:
+        score = max(0, score - 3)
+        cat.findings.append(
+            f"No {GITIGNORE} at all -- secrets and build artifacts will be tracked."
+        )
+        cat.fixes.append(
+            f"Run `git init` properly or copy a starter {GITIGNORE} for your stack."
+        )
+
+    cat.score = max(0, score)
+    if cat.score == cat.max_score:
+        cat.detail = f"no leaked secrets, {GITIGNORE} present"
+    elif leaked or suspect_files:
+        cat.detail = "RISK: review findings"
+    else:
+        cat.detail = "minor gaps"
+
+    return cat
+
+
+def _score_cost_mode(project: Path) -> tuple[int, str | None]:
+    """5 points if the cost-mode skill is installed."""
+    candidates = (
+        project / "skills" / "cost-mode",
+        project / DOT_CLAUDE / "skills" / "cost-mode",
+    )
+    if any(p.exists() for p in candidates):
+        return 5, "cost-mode skill installed"
+    return 0, None
+
+
+def _score_commands(project: Path) -> tuple[int, str | None]:
+    """Up to 4 points for custom slash commands in .claude/commands/."""
+    cmd_dir = project / DOT_CLAUDE / "commands"
+    if not cmd_dir.is_dir():
+        return 0, None
+    count = len(list(cmd_dir.glob("*.md")))
+    if count >= 3:
+        return 4, f"{count} custom slash command(s)"
+    if count >= 1:
+        return 2, f"{count} custom slash command(s)"
+    return 0, None
+
+
+def _score_subagents(project: Path) -> tuple[int, str | None]:
+    """3 points for any defined custom subagents."""
+    agents_dir = project / DOT_CLAUDE / "agents"
+    if agents_dir.is_dir() and any(agents_dir.iterdir()):
+        return 3, "custom subagent(s) defined"
+    return 0, None
+
+
+def _score_plugin_metadata(project: Path) -> tuple[int, str | None]:
+    """3 points for a .claude-plugin/marketplace.json file."""
+    if (project / ".claude-plugin" / "marketplace.json").is_file():
+        return 3, "plugin marketplace metadata"
+    return 0, None
+
+
+def score_optimizer_tooling(project: Path) -> CategoryResult:
+    """Bonus points for already-installed cost-optimization tooling."""
+    cat = CategoryResult(
+        name="Optimizer tooling",
+        score=0,
+        max_score=15,
+        detail="",
+        findings=[],
+        fixes=[],
+    )
+
+    sub_scorers = (
+        _score_cost_mode,
+        _score_commands,
+        _score_subagents,
+        _score_plugin_metadata,
+    )
+    score = 0
+    found: list[str] = []
+    for sub_scorer in sub_scorers:
+        sub_score, label = sub_scorer(project)
+        score += sub_score
+        if label is not None:
+            found.append(label)
+
+    cat.score = min(score, cat.max_score)
+    cat.detail = (
+        ", ".join(found)
+        if found
+        else "none of: cost-mode skill, custom commands, subagents, plugin metadata"
+    )
+
+    if not found:
+        cat.fixes.append(
+            "Install the cost-mode skill for shorter responses and model-routing hints:\n"
+            "    /plugin marketplace add Sagargupta16/claude-cost-optimizer\n"
+            "    /plugin install cost-mode@sagargupta16-claude-cost-optimizer"
+        )
+    if not (project / DOT_CLAUDE / "commands").is_dir():
+        cat.fixes.append(
+            f"Create {DOT_CLAUDE}/commands/ with reusable slash commands "
+            "(e.g. /cost-check, /quick-fix). Saves re-explaining workflows."
+        )
+
+    return cat
+
+
+# -- Grade mapping -----------------------------------------------------------
+
+
+def total_to_grade(total: int, max_total: int) -> str:
+    """Map (score, max) to a letter grade via GRADE_TABLE."""
+    pct = (total / max_total) * 100 if max_total else 0
+    for threshold, letter in GRADE_TABLE:
+        if pct >= threshold:
+            return letter
+    return "F"
+
+
+def grade_color(grade: str) -> str:
+    return {
+        "A+": "brightgreen",
+        "A": "green",
+        "B": "yellowgreen",
+        "C": "yellow",
+        "D": "orange",
+        "F": "red",
+    }.get(grade, "lightgrey")
+
+
+def grade_ansi(grade: str) -> str:
+    if grade in ("A+", "A"):
+        return GREEN
+    if grade == "B":
+        return YELLOW
+    if grade == "C":
+        return YELLOW
+    return RED
+
+
+def badge_url(grade: str) -> str:
+    import urllib.parse
+
+    return (
+        "https://img.shields.io/badge/Claude%20Cost%20Grade-"
+        f"{urllib.parse.quote(grade, safe='')}-{grade_color(grade)}"
+    )
+
+
+# -- Cost estimation ---------------------------------------------------------
+
+
+def _rates_for_prompt(model: dict[str, Any], prompt_tokens: float) -> dict[str, Any]:
+    """The input, output and cache-read rates a request of `prompt_tokens` pays.
+
+    Haiku 5.5 is priced by prompt length: a prompt over its threshold pays the
+    long-prompt rates on the whole request. Every other model has one rate.
+    """
+    tier = model.get("long_prompt")
+    if tier and prompt_tokens > tier["threshold"]:
+        return tier
+    return model
+
+
+def estimate_costs(claude_md_chars: int, mcp_count: int) -> dict[str, dict[str, float]]:
+    """Estimate per-session and per-month cost for each active model.
+
+    Assumes 30 turns/session, 3 sessions/day, 22 working days/month -- the
+    deployed analyzer's defaults -- and bills each turn the way Claude Code
+    caches a conversation: the previous request is a cache read and only the
+    new exchange is a 5-minute cache write (code.claude.com/docs/en/prompt-caching).
+    """
+    claude_md_tokens = claude_md_chars / 4  # ~4 chars per token
+    mcp_tokens = mcp_count * TOKENS_PER_MCP_SERVER
+    system_prompt_tokens = SYSTEM_PROMPT_TOKENS + claude_md_tokens + mcp_tokens
+
+    turns = 30
+    sessions_per_day = 3
+    working_days = 22
+
+    out: dict[str, dict[str, float]] = {}
+    for mid, m in MODELS.items():
+        overhead = m["tokenizer_overhead"]
+        # Per turn, because a tiered model prices each request by its own prompt
+        # length. The first turn writes the whole prompt to the cache.
+        per_session = 0.0
+        previous = 0.0
+        for turn in range(turns):
+            prompt = (
+                system_prompt_tokens + turn * HISTORY_GROWTH_PER_TURN + TOKENS_PER_FILE_READ
+            ) * overhead
+            rates = _rates_for_prompt(m, prompt)
+            per_session += (
+                previous * rates["cache_hit"]
+                + (prompt - previous) * rates["cache_5m_write"]
+                + OUTPUT_TOKENS_PER_TURN * overhead * rates["output"]
+            ) / 1_000_000
+            previous = prompt
+        out[mid] = {
+            "name": m["name"],
+            "per_session": round(per_session, 2),
+            "per_month": round(per_session * sessions_per_day * working_days, 2),
+        }
+    return out
+
+
+# -- Your whole setup (--user) and real usage (--usage) -----------------------
+#
+# Everything here reads local files only and sends nothing anywhere. From
+# ~/.claude.json and settings it reads counts and setting names, never values
+# (they can hold credentials); from transcripts it reads token counts and model
+# names, never message content.
+
+# Skill listing: each skill's description plus when_to_use sits in context on
+# every turn, capped at 1,536 characters (code.claude.com/docs/en/skills).
+_SKILL_LISTING_CAP = 1_536
+_USAGE_DAYS_DEFAULT = 30
+# Same model prices under another snapshot name: these rows reuse that pricing.
+_PRICE_ALIASES = {
+    "mythos-5-1": "fable-5-1",
+    "mythos-5": "fable-5",
+    "opus-4-5": "opus-4-6",
+    "sonnet-4-5": "sonnet-4-6",
+}
+
+
+@dataclass
+class ScopeResult:
+    """A graded scope (your user-level setup, or your measured usage)."""
+
+    name: str
+    score: int
+    max_score: int
+    grade: str
+    categories: list[CategoryResult]
+    facts: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "score": self.score,
+            "max_score": self.max_score,
+            "grade": self.grade,
+            "categories": [c.__dict__ for c in self.categories],
+            "facts": self.facts,
+        }
+
+
+def _scope(name: str, categories: list[CategoryResult], facts: dict[str, Any]) -> ScopeResult:
+    total = sum(c.score for c in categories)
+    max_total = sum(c.max_score for c in categories)
+    return ScopeResult(name, total, max_total, total_to_grade(total, max_total), categories, facts)
+
+
+def _claude_dir() -> Path:
+    """Claude Code's config directory: $CLAUDE_CONFIG_DIR, else ~/.claude."""
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(env).expanduser() if env else Path.home() / ".claude"
+
+
+def _json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _text_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    except OSError:
+        return ""
+
+
+_FRONTMATTER_KEY = re.compile(r"[A-Za-z_][\w-]*")
+
+
+def _frontmatter(text: str) -> dict[str, str]:
+    """Top-level keys of a leading YAML frontmatter block; block scalars are joined."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    out: dict[str, str] = {}
+    key = None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        name, colon, rest = line.partition(":")
+        if colon and _FRONTMATTER_KEY.fullmatch(name):
+            key, value = name, rest.strip()
+            out[key] = "" if value in (">", ">-", "|", "|-") else value.strip("'\"")
+        elif key and line[:1] in (" ", "\t", "-"):
+            out[key] = f"{out[key]} {line.strip()}".strip()
+    return out
+
+
+def _tier_points(value: float, tiers: tuple[tuple[float, int], ...], floor: int) -> int:
+    """Points for the first (limit, points) tier that `value` is at or under."""
+    return next((points for limit, points in tiers if value <= limit), floor)
+
+
+def _always_loaded_instructions(claude_dir: Path) -> list[tuple[str, int]]:
+    """(name, chars) of user-scope files Claude Code loads at launch in every project.
+
+    ~/.claude/CLAUDE.md, plus every ~/.claude/rules/ file without `paths`
+    frontmatter (code.claude.com/docs/en/memory).
+    """
+    files = []
+    claude_md = claude_dir / CLAUDE_MD
+    if claude_md.is_file():
+        files.append((CLAUDE_MD, len(_text_file(claude_md))))
+    rules = claude_dir / "rules"
+    for rule in sorted(rules.rglob("*.md")) if rules.is_dir() else []:
+        text = _text_file(rule)
+        if "paths" not in _frontmatter(text):
+            files.append((f"rules/{rule.relative_to(rules).as_posix()}", len(text)))
+    return files
+
+
+_INSTRUCTION_TIERS = ((2_000, 25), (4_000, 20), (8_000, 14), (16_000, 8))
+
+
+def score_user_instructions(claude_dir: Path) -> CategoryResult:
+    files = _always_loaded_instructions(claude_dir)
+    tokens = math.ceil(sum(chars for _, chars in files) / 4)
+    cat = CategoryResult("Global instructions", 0, 25, "", [], [])
+    cat.score = _tier_points(tokens, _INSTRUCTION_TIERS, 3)
+    cat.detail = f"~{tokens:,} tokens in {len(files)} always-loaded file(s)"
+    if tokens > _INSTRUCTION_TIERS[0][0]:
+        biggest = sorted(files, key=lambda f: f[1], reverse=True)[:3]
+        listed = ", ".join(f"{name} ~{math.ceil(chars / 4):,}" for name, chars in biggest)
+        cat.findings.append(
+            f"~{tokens:,} tokens load at the start of every session in every project. Largest: {listed}."
+        )
+        cat.fixes.append(
+            "Move project- or task-specific rules into that project's CLAUDE.md, a skill, or a "
+            "rules file with `paths:` frontmatter so it loads only for matching files."
+        )
+    return cat
+
+
+def _skill_listing_chars(skill_md: Path) -> int:
+    meta = _frontmatter(_text_file(skill_md))
+    if meta.get("disable-model-invocation", "").lower() == "true":
+        return 0
+    listing = " ".join(part for part in (meta.get("description", ""), meta.get("when_to_use", "")) if part)
+    return min(len(listing), _SKILL_LISTING_CAP) + len(meta.get("name", skill_md.parent.name))
+
+
+def _enabled_plugin_dirs(claude_dir: Path, settings: dict[str, Any]) -> list[Path]:
+    """Install directories of the plugins enabled in user settings."""
+    enabled = {k for k, v in (settings.get("enabledPlugins") or {}).items() if v is True}
+    installed = _json_file(claude_dir / "plugins" / "installed_plugins.json").get("plugins") or {}
+    dirs = []
+    for key, entries in installed.items():
+        records = entries if isinstance(entries, list) else [entries]
+        paths = [Path(r["installPath"]) for r in records if isinstance(r, dict) and r.get("installPath")]
+        dirs.extend(p for p in paths[:1] if key in enabled and p.is_dir())
+    return dirs
+
+
+_LISTING_TIERS = ((1_000, 20), (2_500, 16), (5_000, 11), (10_000, 6))
+
+
+def score_user_skills(claude_dir: Path, settings: dict[str, Any]) -> CategoryResult:
+    roots = [claude_dir] + _enabled_plugin_dirs(claude_dir, settings)
+    skills = [md for root in roots for md in (root / "skills").glob("*/SKILL.md")]
+    tokens = math.ceil(sum(_skill_listing_chars(md) for md in skills) / 4)
+    plugins = len(roots) - 1
+    cat = CategoryResult("Skill listing", 0, 20, "", [], [])
+    cat.score = _tier_points(tokens, _LISTING_TIERS, 2)
+    cat.detail = f"{len(skills)} skill(s) in ~/.claude/skills and {plugins} enabled plugin(s), ~{tokens:,} listing tokens"
+    if tokens > _LISTING_TIERS[0][0]:
+        cat.findings.append(
+            f"Skill descriptions add ~{tokens:,} tokens to context on every turn, used or not."
+        )
+        cat.fixes.append(
+            "Run /skill-doctor in a session: it lists what each skill costs and how often it is "
+            "used. Disable plugins you do not use, and set `disable-model-invocation: true` on "
+            "skills you only ever call by name -- their descriptions then leave the listing."
+        )
+    return cat
+
+
+def _user_mcp_counts(project: Path) -> dict[str, int]:
+    """User-scope servers, plus local-scope servers stored for this project, in ~/.claude.json."""
+    data = _json_file(Path.home() / ".claude.json")
+    key = project.resolve().as_posix().lower()
+    projects = {k.lower(): v for k, v in (data.get("projects") or {}).items() if isinstance(v, dict)}
+    return {
+        "user": len(data.get("mcpServers") or {}),
+        "local (this project)": len((projects.get(key) or {}).get("mcpServers") or {}),
+    }
+
+
+def score_user_mcp(project: Path, settings: dict[str, Any]) -> CategoryResult:
+    counts = _user_mcp_counts(project)
+    total = sum(counts.values())
+    cat = CategoryResult("MCP servers (user)", 0, 20, "", [], [])
+    cat.score = _tier_points(total, ((3, 20), (5, 15), (8, 9)), 4)
+    cat.detail = ", ".join(f"{n} {scope}" for scope, n in counts.items())
+    env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
+    if str(env.get("ENABLE_TOOL_SEARCH", "")).lower() == "false":
+        cat.findings.append(
+            "ENABLE_TOOL_SEARCH=false in user settings: every MCP tool schema loads up front on every request."
+        )
+    if total > 3:
+        cat.fixes.append(
+            "These load in every project. Run /mcp to disable servers you are not using, and move "
+            "project-specific ones to that project's .mcp.json. Prefer an installed CLI (gh, aws, "
+            "gcloud) where one exists -- it adds no per-tool listing."
+        )
+    return cat
+
+
+def _user_cost_signals(settings: dict[str, Any]) -> list[str]:
+    """Cost controls in user settings that Opus 5.5 and later models honor.
+
+    A top-level effortLevel in ~/.claude/settings.json is ignored by Opus 5.5 and
+    models released after it; /effort saves a per-model level under modelSettings
+    (code.claude.com/docs/en/settings-reference).
+    """
+    signals = [s for s in _cost_control_signals(settings) if not s.startswith("effortLevel")]
+    per_model = settings.get("modelSettings") if isinstance(settings.get("modelSettings"), dict) else {}
+    for model, conf in per_model.items():
+        effort = conf.get("effortLevel") if isinstance(conf, dict) else None
+        if isinstance(effort, str) and effort.lower() in ("low", "medium"):
+            signals.append(f"{model} effortLevel={effort}")
+    return signals
+
+
+def score_user_settings(settings: dict[str, Any]) -> CategoryResult:
+    has_model, _, _, model_id = _settings_features(settings) if settings else (False, [], False, None)
+    signals = _user_cost_signals(settings) if settings else []
+    cat = CategoryResult("Settings (user)", 0, 20, "", [], [])
+    cat.score = (8 if has_model else 0) + (12 if signals else 0)
+    cat.detail = f"model={model_id or 'not pinned'}; cost controls: {', '.join(signals) or 'none'}"
+    if settings.get("fastMode") is True:
+        cat.findings.append("fastMode=true: Fast Mode bills 2x the model's base rate on every request.")
+    if isinstance(settings.get("effortLevel"), str):
+        cat.findings.append(
+            "Top-level effortLevel in user settings does not apply to Opus 5.5 or later models. "
+            "Run /effort in a session to save a per-model level under modelSettings."
+        )
+    if not signals:
+        cat.fixes.append(
+            "Set a cost control Claude Code reads: /effort low or medium per model (saved under "
+            'modelSettings), "fastMode": false, or "availableModels" with "enforceAvailableModels".'
+        )
+    return cat
+
+
+def score_user_read_denies(settings: dict[str, Any]) -> CategoryResult:
+    count = len(_read_deny_rules(settings))
+    cat = CategoryResult("Read deny rules (user)", 0, 15, "", [], [])
+    cat.score = _tier_points(-count, ((-5, 15), (-1, 9)), 0)
+    cat.detail = f"{count} Read(...) rule(s) in user permissions.deny"
+    if count == 0:
+        cat.fixes.append(
+            "Add rules that apply in every project to ~/.claude/settings.json: "
+            '"permissions": {"deny": ["Read(.env)", "Read(.env.*)", "Read(node_modules/**)", '
+            '"Read(dist/**)"]} -- a single-segment deny pattern matches at any depth.'
+        )
+    return cat
+
+
+def rate_user(project: Path) -> ScopeResult:
+    """Grade the user-level setup that loads in every project."""
+    claude_dir = _claude_dir()
+    settings = _json_file(claude_dir / SETTINGS_JSON)
+    categories = [
+        score_user_instructions(claude_dir),
+        score_user_skills(claude_dir, settings),
+        score_user_mcp(project, settings),
+        score_user_settings(settings),
+        score_user_read_denies(settings),
+    ]
+    return _scope("Your Claude Code setup (user scope)", categories, {"config_dir": str(claude_dir)})
+
+
+# -- Real usage from local transcripts --
+
+
+def _model_key(model_id: str) -> str | None:
+    """MODELS key for a transcript model id (dated, Bedrock and [1m] forms included)."""
+    for key in sorted(list(MODELS) + list(_PRICE_ALIASES), key=len, reverse=True):
+        if key in model_id:
+            return _PRICE_ALIASES.get(key, key)
+    return None
+
+
+def _request_cost(model: dict[str, Any], usage: dict[str, Any]) -> tuple[float, int]:
+    """(list-price dollars, prompt tokens) for one API request's usage block."""
+    fresh = usage.get("input_tokens") or 0
+    cache_read = usage.get("cache_read_input_tokens") or 0
+    writes = usage.get("cache_creation_input_tokens") or 0
+    split = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
+    write_1h = split.get("ephemeral_1h_input_tokens") or 0
+    write_5m = writes - write_1h
+    prompt = fresh + cache_read + writes
+    rates = _rates_for_prompt(model, prompt)
+    dollars = (
+        fresh * rates["input"]
+        + cache_read * rates["cache_hit"]
+        + write_5m * rates["cache_5m_write"]
+        + write_1h * rates["cache_1h_write"]
+        + (usage.get("output_tokens") or 0) * rates["output"]
+    ) / 1_000_000
+    if usage.get("speed") == "fast" and model.get("fast_mode"):
+        dollars *= 2
+    return dollars, prompt
+
+
+@dataclass
+class _UsageTotals:
+    files: int = 0
+    requests: int = 0
+    unpriced: int = 0
+    fresh: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    output: int = 0
+    output_dollars: float = 0.0
+    fast_requests: int = 0
+    prompts: list[int] = field(default_factory=list)
+    by_model: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    def add(self, model_id: str, usage: dict[str, Any]) -> None:
+        self.requests += 1
+        self.fresh += usage.get("input_tokens") or 0
+        self.cache_read += usage.get("cache_read_input_tokens") or 0
+        self.cache_write += usage.get("cache_creation_input_tokens") or 0
+        self.output += usage.get("output_tokens") or 0
+        self.fast_requests += usage.get("speed") == "fast"
+        key = _model_key(model_id)
+        if key is None:
+            self.unpriced += 1
+            return
+        dollars, prompt = _request_cost(MODELS[key], usage)
+        self.prompts.append(prompt)
+        out_rate = _rates_for_prompt(MODELS[key], prompt)["output"]
+        self.output_dollars += (usage.get("output_tokens") or 0) * out_rate / 1_000_000
+        row = self.by_model.setdefault(MODELS[key]["name"], {"requests": 0, "dollars": 0.0, "key": key})
+        row["requests"] += 1
+        row["dollars"] += dollars
+
+
+def _assistant_usage(line: str) -> tuple[str, str, dict[str, Any]] | None:
+    """(message id, model, usage) of an assistant transcript record, else None."""
+    if '"usage"' not in line or '"assistant"' not in line:
+        return None
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return None
+    message = record.get("message") if record.get("type") == "assistant" else None
+    if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+        return None
+    model = message.get("model") or ""
+    if not message.get("id") or model.startswith("<"):
+        return None
+    return message["id"], model, message["usage"]
+
+
+def collect_usage(days: int) -> _UsageTotals:
+    """Sum the last `days` days of Claude Code transcripts under <config dir>/projects.
+
+    A response is written as one record per content block, all carrying the same
+    message id and usage, so each id is counted once.
+    """
+    totals = _UsageTotals()
+    root = _claude_dir() / "projects"
+    cutoff = time.time() - days * 86_400
+    seen: set[str] = set()
+    for path in root.rglob("*.jsonl") if root.is_dir() else []:
+        if path.stat().st_mtime < cutoff:
+            continue
+        before = totals.requests
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for parsed in filter(None, map(_assistant_usage, handle)):
+                message_id, model, usage = parsed
+                if message_id not in seen:
+                    seen.add(message_id)
+                    totals.add(model, usage)
+        totals.files += totals.requests > before
+    return totals
+
+
+def _percentile(values: list[int], share: float) -> int:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(share * len(ordered)))] if ordered else 0
+
+
+_CACHE_TIERS = ((0.5, 5), (0.7, 15), (0.8, 30), (0.9, 40))
+_CONTEXT_TIERS = ((50_000, 30), (100_000, 24), (200_000, 16), (400_000, 8))
+
+
+def _score_cache(totals: _UsageTotals) -> CategoryResult:
+    prompt_tokens = totals.fresh + totals.cache_read + totals.cache_write
+    hit = totals.cache_read / prompt_tokens if prompt_tokens else 0.0
+    cat = CategoryResult("Cache hit rate", 0, 50, "", [], [])
+    cat.score = next((points for floor, points in reversed(_CACHE_TIERS) if hit >= floor), 0)
+    cat.score = 50 if hit >= 0.95 else cat.score
+    cat.detail = f"{hit:.1%} of prompt tokens were cache reads"
+    if hit < 0.9:
+        cat.fixes.append(
+            "Cache misses re-bill your whole prefix. Keep one session per task, /clear between "
+            "unrelated tasks instead of switching models mid-task, compact before a long break "
+            "rather than after it, and leave MCP tool search on so server changes keep the cache."
+        )
+    return cat
+
+
+def _score_context(totals: _UsageTotals) -> CategoryResult:
+    median = _percentile(totals.prompts, 0.5)
+    p90 = _percentile(totals.prompts, 0.9)
+    over_100k = sum(p > 100_000 for p in totals.prompts)
+    cat = CategoryResult("Context size", 0, 30, "", [], [])
+    cat.score = _tier_points(median, _CONTEXT_TIERS, 2)
+    share = over_100k / len(totals.prompts) if totals.prompts else 0.0
+    cat.detail = f"median prompt {median:,} tokens, p90 {p90:,}; {share:.0%} of requests over 100K"
+    if median > 100_000:
+        cat.fixes.append(
+            "Every turn resends the whole conversation. /clear between tasks, /compact once a task "
+            "is done, and delegate searches to subagents so their reads stay out of your main context."
+        )
+    return cat
+
+
+def _usage_facts(totals: _UsageTotals, days: int) -> dict[str, Any]:
+    spend = sum(row["dollars"] for row in totals.by_model.values())
+    models = sorted(totals.by_model.items(), key=lambda kv: kv[1]["dollars"], reverse=True)
+    return {
+        "days": days,
+        "sessions": totals.files,
+        "requests": totals.requests,
+        "unpriced_requests": totals.unpriced,
+        "list_price_dollars": round(spend, 2),
+        "output_share": round(totals.output_dollars / spend, 3) if spend else 0,
+        "fast_mode_requests": totals.fast_requests,
+        "by_model": [
+            {"model": name, "key": row["key"], "requests": int(row["requests"]),
+             "dollars": round(row["dollars"], 2), "share": round(row["dollars"] / spend, 3) if spend else 0}
+            for name, row in models
+        ],
+    }
+
+
+# Current model for each legacy family, for the migration suggestion.
+_SUCCESSORS = {"opus": "opus-5-5", "sonnet": "sonnet-5-5", "haiku": "haiku-5-5", "fable": "fable-5-1"}
+
+
+def _legacy_fixes(facts: dict[str, Any]) -> list[str]:
+    """Suggest the current model for each legacy model carrying 10% or more of list-price spend."""
+    fixes = []
+    for row in facts["by_model"]:
+        old = MODELS[row["key"]]
+        new_key = _SUCCESSORS.get(row["key"].split("-")[0])
+        if old.get("lifecycle") != "legacy" or row["share"] < 0.1 or not new_key:
+            continue
+        new = MODELS[new_key]
+        fixes.append(
+            f"{row['share']:.0%} of list-price spend ({row['requests']:,} requests) ran on legacy {old['name']} "
+            f"(${old['input']:g}/${old['output']:g} per 1M). {new['name']} is ${new['input']:g}/${new['output']:g}; "
+            "pin it in the subagent, skill or workflow that names the old model, or check what the "
+            "`opus`/`sonnet`/`haiku` alias resolves to on your provider."
+        )
+    return fixes
+
+
+def _routing_fix(facts: dict[str, Any]) -> str | None:
+    """A routing suggestion when one premium model carries most of the list-price spend."""
+    top = facts["by_model"][0] if facts["by_model"] else None
+    model = MODELS.get(top["key"]) if top else None
+    if not model or top["share"] < 0.8 or model["input"] < MODELS["sonnet-5-5"]["input"] * 2:
+        return None
+    haiku = MODELS["haiku-5-5"]
+    return (
+        f"{top['share']:.0%} of list-price spend is on {top['model']} (${model['input']:g}/${model['output']:g} "
+        f"per 1M). Route search, summaries and other simple subagent work to Haiku 5.5 "
+        f"(${haiku['input']:g}/${haiku['output']:g} while the prompt stays under 100K tokens, "
+        f"{model['input'] / haiku['input']:g}x cheaper per token) with `model: haiku` in the subagent."
+    )
+
+
+def _score_models(facts: dict[str, Any], fast_requests: int) -> CategoryResult:
+    """Share of list-price spend on current models, plus migration and routing advice."""
+    legacy = sum(row["share"] for row in facts["by_model"] if MODELS[row["key"]].get("lifecycle") == "legacy")
+    cat = CategoryResult("Model mix", round(20 * (1 - legacy)), 20, "", [], [])
+    cat.detail = f"{legacy:.0%} of list-price spend on legacy models"
+    routing = _routing_fix(facts)
+    if routing:
+        cat.fixes.append(routing)
+    cat.fixes.extend(_legacy_fixes(facts))
+    if fast_requests:
+        cat.findings.append(f"{fast_requests:,} request(s) ran in Fast Mode, billed at 2x the model's base rate.")
+    return cat
+
+
+def rate_usage(days: int) -> ScopeResult:
+    """Grade measured usage from local transcripts: cache efficiency, context size, model mix."""
+    totals = collect_usage(days)
+    facts = _usage_facts(totals, days)
+    name = f"Your measured usage (last {days} days)"
+    if not totals.prompts:
+        # Nothing to measure: report that rather than grading an empty sample.
+        return ScopeResult(name, 0, 0, "n/a", [], facts)
+    categories = [_score_cache(totals), _score_context(totals), _score_models(facts, totals.fast_requests)]
+    return _scope(name, categories, facts)
+
+
+# -- Main rate function ------------------------------------------------------
+
+_SCORERS = (
+    score_claude_md,
+    score_file_read_exclusions,
+    score_settings,
+    score_mcp_servers,
+    score_hooks,
+    score_security,
+    score_optimizer_tooling,
+)
+
+
+def rate(project: Path) -> RateResult:
+    categories = [scorer(project) for scorer in _SCORERS]
+    total = sum(c.score for c in categories)
+    max_total = sum(c.max_score for c in categories)
+    grade = total_to_grade(total, max_total)
+
+    _, claude_md_chars, _ = _gather_claude_md(project)
+    counts, _ = _count_mcp_servers(project)
+    mcp_count = sum(counts.values())
+
+    cost_estimate = estimate_costs(claude_md_chars, mcp_count)
+    url = badge_url(grade)
+
+    return RateResult(
+        project=str(project.resolve()),
+        score=total,
+        max_score=max_total,
+        grade=grade,
+        categories=categories,
+        cost_estimate=cost_estimate,
+        badge_url=url,
+        badge_markdown=f"![Claude Cost Grade]({url})",
+    )
+
+
+# -- Output formatters -------------------------------------------------------
+
+_BAR_WIDTH = 20
+_PRICING_VERIFIED_DATE = "2026-10-09"
+
+
+def _ratio_color(ratio: float) -> str:
+    """Pick an ANSI color matching a 0..1 score ratio."""
+    if ratio >= 0.8:
+        return GREEN
+    if ratio >= 0.5:
+        return YELLOW
+    return RED
+
+
+def _print_category_lines(categories: list[CategoryResult]) -> None:
+    """Render the per-category bar chart + findings."""
+    for cat in categories:
+        ratio = cat.score / cat.max_score if cat.max_score else 0
+        color = _ratio_color(ratio)
+        filled = int(_BAR_WIDTH * ratio)
+        bar = "#" * filled + "-" * (_BAR_WIDTH - filled)
+        score_str = f"{cat.score:>2}/{cat.max_score:<2}"
+        print(
+            f"  {cat.name:<24} {color}[{bar}]{RESET}  {color}{score_str}{RESET}  "
+            f"{DIM}{cat.detail}{RESET}"
+        )
+        for finding in cat.findings:
+            print(f"    {YELLOW}!{RESET} {finding}")
+
+
+def _print_cost_block(result: RateResult) -> None:
+    """Render total/grade and the per-model cost estimate table."""
+    grade_c = grade_ansi(result.grade)
+    print(
+        f"{BOLD}Total:{RESET} {result.score}/{result.max_score}  ({grade_c}{result.grade}{RESET})"
+    )
+    print()
+    print(
+        f"{BOLD}Estimated monthly cost{RESET} "
+        f"{DIM}(30 turns/session, 3 sessions/day, 22 days; each turn reads the last one from cache){RESET}"
+    )
+    for cost in result.cost_estimate.values():
+        print(
+            f"  {cost['name']:<14} {DIM}${cost['per_session']:>5.2f}/session{RESET}"
+            f"  ->  {BOLD}${cost['per_month']:>7.2f}/month{RESET}"
+        )
+    print()
+    print(f"{CYAN}Badge URL:{RESET}  {result.badge_url}")
+    print(f"{CYAN}Markdown:{RESET}  {result.badge_markdown}")
+
+
+def _print_fix_block(result: RateResult) -> None:
+    """Render the --fix output block."""
+    print()
+    print(f"{BOLD}Suggested fixes{RESET} {DIM}(--fix for copy-pasteable form){RESET}")
+    print(f"{DIM}{'-' * 60}{RESET}")
+    any_fix = False
+    for cat in result.categories:
+        for fix in cat.fixes:
+            any_fix = True
+            print(f"  {MAGENTA}*{RESET} [{cat.name}] {fix}")
+            print()
+    if not any_fix:
+        print(f"  {GREEN}No fixes needed -- your setup looks well-tuned.{RESET}")
+
+
+def print_report(result: RateResult, show_fixes: bool = False) -> None:
+    print()
+    print(f"{BOLD}claude-rate{RESET} {DIM}-- Claude / AI setup audit{RESET}")
+    print(f"{DIM}{'=' * 60}{RESET}")
+    print(f"Project: {result.project}")
+    print(
+        f"Verified against Anthropic pricing as of: {DIM}{_PRICING_VERIFIED_DATE}{RESET}"
+    )
+    print()
+
+    _print_category_lines(result.categories)
+    print()
+    _print_cost_block(result)
+
+    if show_fixes:
+        _print_fix_block(result)
+    else:
+        unfixed = sum(len(c.fixes) for c in result.categories)
+        if unfixed:
+            print()
+            print(
+                f"{DIM}Run with --fix to see {unfixed} copy-pasteable fix suggestion(s).{RESET}"
+            )
+
+    print()
+
+
+def _print_scope(scope: ScopeResult, show_fixes: bool) -> None:
+    """Render a --user or --usage section: bars, findings, grade, then fixes."""
+    print()
+    print(f"{BOLD}{scope.name}{RESET}")
+    print(f"{DIM}{'-' * 60}{RESET}")
+    if not scope.categories:
+        return
+    _print_category_lines(scope.categories)
+    grade_c = grade_ansi(scope.grade)
+    print(f"  {BOLD}Score:{RESET} {scope.score}/{scope.max_score}  ({grade_c}{scope.grade}{RESET})")
+    fixes = [(c.name, f) for c in scope.categories for f in c.fixes]
+    if show_fixes:
+        for name, fix in fixes:
+            print(f"  {MAGENTA}*{RESET} [{name}] {fix}")
+    elif fixes:
+        print(f"  {DIM}{len(fixes)} suggestion(s) -- add --fix to see them.{RESET}")
+
+
+def _print_usage_facts(facts: dict[str, Any]) -> None:
+    """Render list-price spend by model for the --usage section."""
+    if not facts.get("requests"):
+        print(f"  {DIM}No transcripts found in the last {facts.get('days')} days.{RESET}")
+        return
+    print(
+        f"  {facts['requests']:,} requests in {facts['sessions']:,} session file(s); "
+        f"list-price total ${facts['list_price_dollars']:,.2f}, "
+        f"{facts['output_share']:.0%} of it output"
+    )
+    for row in facts["by_model"][:6]:
+        print(f"    {row['model']:<14} {row['requests']:>7,} requests  ${row['dollars']:>10,.2f}  {row['share']:>4.0%}")
+    print(
+        f"  {DIM}List price = what these tokens cost on the API. On a Pro or Max plan you pay the "
+        f"plan price; use this to compare models and habits, not as a bill.{RESET}"
+    )
+    if facts.get("unpriced_requests"):
+        print(f"  {DIM}{facts['unpriced_requests']:,} request(s) on models without a price row were counted but not priced.{RESET}")
+
+
+# -- CLI entry point ---------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="claude-rate",
+        description="Rate the cost-efficiency of a Claude / AI setup in a local project directory; "
+        "add --user to grade your user-level setup and --usage to grade measured usage.",
+        epilog="Source: https://github.com/Sagargupta16/claude-cost-optimizer",
+    )
+    parser.add_argument(
+        "path", nargs="?", default=".", help="Project directory (default: current dir)"
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON",
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        dest="show_fixes",
+        help="Show copy-pasteable fix suggestions",
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="Exit with status 1 if grade is below B"
+    )
+    parser.add_argument(
+        "--user",
+        action="store_true",
+        help="Also grade your user-level setup (~/.claude): global instructions, skill "
+        "listing, user MCP servers, user settings and Read deny rules",
+    )
+    parser.add_argument(
+        "--usage",
+        nargs="?",
+        type=int,
+        const=_USAGE_DAYS_DEFAULT,
+        metavar="DAYS",
+        help="Also grade your measured usage from local Claude Code transcripts "
+        f"(default: last {_USAGE_DAYS_DEFAULT} days): cache hit rate, context size, "
+        "model mix and list-price spend per model",
+    )
+    parser.add_argument("--version", action="version", version="claude-rate 0.2.0")
+    return parser
+
+
+def _emit(result: RateResult, scopes: list[ScopeResult], args: argparse.Namespace) -> None:
+    """Print the project grade plus any --user / --usage scopes, as JSON or as a report."""
+    if args.json_output:
+        payload = result.to_dict()
+        payload.update({"user" if s.name.startswith("Your Claude") else "usage": s.to_dict() for s in scopes})
+        print(json.dumps(payload, indent=2))
+        return
+    print_report(result, show_fixes=args.show_fixes)
+    for scope in scopes:
+        _print_scope(scope, args.show_fixes)
+        if "facts" in scope.to_dict() and scope.facts.get("days"):
+            _print_usage_facts(scope.facts)
+    if scopes:
+        print()
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+
+    if not Path(args.path).is_dir():
+        print(f"{RED}Error:{RESET} '{args.path}' is not a directory", file=sys.stderr)
+        sys.exit(2)
+    project = Path(args.path).resolve()
+
+    result = rate(project)
+    scopes = []
+    if args.user:
+        scopes.append(rate_user(project))
+    if args.usage is not None:
+        scopes.append(rate_usage(max(1, args.usage)))
+
+    _emit(result, scopes, args)
+
+    if args.strict and result.grade in ("C", "D", "F"):
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

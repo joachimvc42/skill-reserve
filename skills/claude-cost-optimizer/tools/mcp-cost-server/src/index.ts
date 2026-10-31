@@ -1,0 +1,455 @@
+#!/usr/bin/env node
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+
+// -------------------------------------------------------------------
+// Pricing tables -- verified 2026-10-09
+//
+// cacheHitPerMillion has three multipliers: 0.1x input by default, 0.025x on
+// Fable 5.1 / Mythos 5.1 ($0.25/MTok), and 0.05x on Opus 5.5 ($0.20/MTok) and
+// Sonnet 5.5 ($0.10/MTok since 2026-10-07). Always read the field; never derive it.
+// longPrompt (Haiku 5.5 only): a request whose prompt is over `threshold` tokens,
+// cache reads and writes included, pays those rates on the whole request.
+// -------------------------------------------------------------------
+
+interface ModelPricing {
+  inputPerMillion: number;
+  outputPerMillion: number;
+  cacheHitPerMillion: number;
+  /** Prefixes shorter than this are silently not cached (no error, full input price). */
+  minCacheTokens: number;
+  longPrompt?: {
+    threshold: number;
+    inputPerMillion: number;
+    outputPerMillion: number;
+    cacheHitPerMillion: number;
+  };
+}
+
+const PRICING: Record<string, ModelPricing> = {
+  // "fable" = Fable 5.1, the most capable widely released model (2.5x Opus 5.5 rates,
+  // but a 0.025x cache read -- a quarter of Fable 5's)
+  fable: { inputPerMillion: 10, outputPerMillion: 50, cacheHitPerMillion: 0.25, minCacheTokens: 512 },
+  "fable-5": { inputPerMillion: 10, outputPerMillion: 50, cacheHitPerMillion: 1, minCacheTokens: 512 },
+  // "opus" alias maps to Opus 5.5 (released 2026-09-22), the recommended default Opus:
+  // $4/$20, 20% below Opus 5, with a 0.05x cache read. Opus 5 is legacy at $5/$25.
+  opus: { inputPerMillion: 4, outputPerMillion: 20, cacheHitPerMillion: 0.2, minCacheTokens: 512 },
+  "opus-5": { inputPerMillion: 5, outputPerMillion: 25, cacheHitPerMillion: 0.5, minCacheTokens: 512 },
+  "opus-4.8": { inputPerMillion: 5, outputPerMillion: 25, cacheHitPerMillion: 0.5, minCacheTokens: 1024 },
+  "opus-4.7": { inputPerMillion: 5, outputPerMillion: 25, cacheHitPerMillion: 0.5, minCacheTokens: 2048 },
+  "opus-4.6": { inputPerMillion: 5, outputPerMillion: 25, cacheHitPerMillion: 0.5, minCacheTokens: 4096 },
+  // "sonnet" = Sonnet 5.5 (released 2026-09-28): the same $2/$10 as Sonnet 5, a
+  // 512-token cache floor, and a $0.10 cache read (0.05x, cut on 2026-10-07). "sonnet-5"
+  // is legacy Sonnet 5 at its permanent $2/$10 (the scheduled rise to $3/$15 on
+  // 2026-09-01 was cancelled); Sonnet 4.6 stays at $3/$15
+  sonnet: { inputPerMillion: 2, outputPerMillion: 10, cacheHitPerMillion: 0.1, minCacheTokens: 512 },
+  "sonnet-5": { inputPerMillion: 2, outputPerMillion: 10, cacheHitPerMillion: 0.2, minCacheTokens: 1024 },
+  "sonnet-4.6": { inputPerMillion: 3, outputPerMillion: 15, cacheHitPerMillion: 0.3, minCacheTokens: 1024 },
+  // "haiku" = Haiku 5.5 (released 2026-10-07), priced by prompt length: $0.10/$0.50
+  // up to 100,000 prompt tokens, $0.50/$2.50 above. "haiku-4.5" is legacy Haiku 4.5.
+  haiku: {
+    inputPerMillion: 0.1,
+    outputPerMillion: 0.5,
+    cacheHitPerMillion: 0.01,
+    minCacheTokens: 512,
+    longPrompt: { threshold: 100_000, inputPerMillion: 0.5, outputPerMillion: 2.5, cacheHitPerMillion: 0.05 },
+  },
+  "haiku-4.5": { inputPerMillion: 1, outputPerMillion: 5, cacheHitPerMillion: 0.1, minCacheTokens: 4096 },
+};
+
+const MODEL_IDS = Object.keys(PRICING);
+const UNKNOWN_MODEL_HINT = `Use one of: ${MODEL_IDS.join(", ")} ("opus" is Opus 5.5, "opus-5" is legacy Opus 5, "sonnet" is Sonnet 5.5, "sonnet-5" is legacy Sonnet 5, "haiku" is Haiku 5.5, "haiku-4.5" is legacy Haiku 4.5, "fable" is Fable 5.1).`;
+
+// -------------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------------
+
+/** Rough token estimate: ~4 characters per token. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** The rates a request with a `promptTokens`-token prompt pays (Haiku 5.5 has two tiers). */
+function ratesFor(pricing: ModelPricing, promptTokens: number): ModelPricing {
+  const tier = pricing.longPrompt;
+  return tier && promptTokens > tier.threshold ? { ...pricing, ...tier } : pricing;
+}
+
+function costForTokens(tokens: number, ratePerMillion: number): number {
+  return (tokens / 1_000_000) * ratePerMillion;
+}
+
+/** A 5-minute cache write costs 1.25x base input on every model. */
+const CACHE_WRITE_5M_MULTIPLIER = 1.25;
+
+/**
+ * Input cost of one Claude Code turn, billed the way Claude Code caches a conversation
+ * (code.claude.com/docs/en/prompt-caching): the previous request is a cache read and only the
+ * new part is a 5-minute cache write. The first turn (previousPrompt 0) writes everything; a
+ * prompt under the model's minimum cacheable length is not cached and pays full input.
+ */
+function turnInputCost(pricing: ModelPricing, promptTokens: number, previousPrompt: number): number {
+  const rates = ratesFor(pricing, promptTokens);
+  if (promptTokens < pricing.minCacheTokens) return costForTokens(promptTokens, rates.inputPerMillion);
+  const cacheRead = previousPrompt >= pricing.minCacheTokens ? Math.min(previousPrompt, promptTokens) : 0;
+  return (
+    costForTokens(cacheRead, rates.cacheHitPerMillion) +
+    costForTokens(promptTokens - cacheRead, rates.inputPerMillion * CACHE_WRITE_5M_MULTIPLIER)
+  );
+}
+
+function formatUsd(amount: number): string {
+  return `$${amount.toFixed(4)}`;
+}
+
+function pctSaving(base: number, other: number): string {
+  if (base === 0) return "0%";
+  return `${(((base - other) / base) * 100).toFixed(1)}%`;
+}
+
+// -------------------------------------------------------------------
+// Tool implementations
+// -------------------------------------------------------------------
+
+function estimateCost(args: {
+  text: string;
+  model?: string;
+  turns?: number;
+}): object {
+  const model = (args.model ?? "sonnet").toLowerCase();
+  const pricing = PRICING[model];
+  if (!pricing) {
+    return { error: `Unknown model "${args.model}". ${UNKNOWN_MODEL_HINT}` };
+  }
+
+  const tokens = estimateTokens(args.text);
+  const passRates = ratesFor(pricing, tokens);
+  const inputCost = costForTokens(tokens, passRates.inputPerMillion);
+  const outputEstimate = Math.ceil(tokens * 0.3); // rough output assumption
+  const outputCost = costForTokens(outputEstimate, passRates.outputPerMillion);
+  const singlePassCost = inputCost + outputCost;
+
+  const result: Record<string, unknown> = {
+    model,
+    estimated_tokens: tokens,
+    input_cost: formatUsd(inputCost),
+    estimated_output_tokens: outputEstimate,
+    output_cost: formatUsd(outputCost),
+    single_pass_total: formatUsd(singlePassCost),
+  };
+
+  if (tokens < pricing.minCacheTokens) {
+    result.cache_warning = `~${tokens} tokens is below the ${pricing.minCacheTokens}-token minimum cacheable prompt for "${model}". A cache_control block on a prefix this short is silently ignored: no error, no cache_creation_input_tokens, and full input price on every turn.`;
+  }
+
+  if (args.turns && args.turns > 1) {
+    // Each turn re-sends the conversation, which grows by ~1,500 tokens a turn.
+    let totalCost = 0;
+    let previousPrompt = 0;
+    for (let t = 1; t <= args.turns; t++) {
+      const promptTokens = tokens + (t - 1) * 1500;
+      totalCost +=
+        turnInputCost(pricing, promptTokens, previousPrompt) +
+        costForTokens(500, ratesFor(pricing, promptTokens).outputPerMillion);
+      previousPrompt = promptTokens;
+    }
+    result.projected_turns = args.turns;
+    result.projected_total_cost = formatUsd(totalCost);
+  }
+
+  return result;
+}
+
+function sessionEstimate(args: {
+  turns: number;
+  model?: string;
+  claude_md_lines?: number;
+  mcp_servers?: number;
+}): object {
+  const model = (args.model ?? "sonnet").toLowerCase();
+  const pricing = PRICING[model];
+  if (!pricing) {
+    return { error: `Unknown model "${args.model}". ${UNKNOWN_MODEL_HINT}` };
+  }
+
+  const turns = args.turns;
+  // 10 tokens per line: measured on this repo's CLAUDE.md files (20,161 cl100k tokens over 2,048 lines).
+  const claudeMdTokens = (args.claude_md_lines ?? 0) * 10;
+  const mcpSchemaTokens = (args.mcp_servers ?? 0) * 1500;
+  const systemPromptTokens = 3500;
+
+  // Stable tokens (loaded every turn, eligible for caching)
+  const stableTokens = systemPromptTokens + claudeMdTokens + mcpSchemaTokens;
+
+  let totalInputCost = 0;
+  let totalOutputCost = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let previousPrompt = 0;
+
+  for (let t = 1; t <= turns; t++) {
+    const historyTokens = (t - 1) * 1500; // cumulative conversation growth
+    const turnInputTokens = stableTokens + historyTokens;
+    const turnOutputTokens = 500;
+
+    totalInputCost += turnInputCost(pricing, turnInputTokens, previousPrompt);
+    totalOutputCost += costForTokens(turnOutputTokens, ratesFor(pricing, turnInputTokens).outputPerMillion);
+    totalInputTokens += turnInputTokens;
+    totalOutputTokens += turnOutputTokens;
+    previousPrompt = turnInputTokens;
+  }
+
+  const totalCost = totalInputCost + totalOutputCost;
+
+  const recommendations: string[] = [];
+  if (claudeMdTokens > 2000) {
+    recommendations.push(
+      `CLAUDE.md contributes ~${claudeMdTokens} tokens/turn. Consider trimming to reduce per-turn cost.`
+    );
+  }
+  if ((args.mcp_servers ?? 0) > 3) {
+    recommendations.push(
+      `${args.mcp_servers} MCP servers are modeled at ~${mcpSchemaTokens} tokens/turn, this tool's own assumption for full schemas, which load up front only when tool search is off. With tool search on (the default), only tool names and server instructions enter context until Claude uses a tool. Prefer CLI tools (gh, aws, gcloud) where available and disable unused servers with /mcp.`
+    );
+  }
+  if (turns > 20) {
+    recommendations.push(
+      "Sessions over 20 turns accumulate significant history cost. Consider starting a fresh session for new tasks."
+    );
+  }
+  if (stableTokens < pricing.minCacheTokens) {
+    recommendations.push(
+      `The stable prefix is only ~${stableTokens} tokens, below the ${pricing.minCacheTokens}-token minimum cacheable prompt for "${model}". Caching is silently skipped at that size, so these figures bill every turn under that size at full input price.`
+    );
+  }
+  if (model === "fable") {
+    recommendations.push(
+      "Fable 5.1 costs 2.5x Opus 5.5 ($10/$50 vs $4/$20). Reserve it for demanding reasoning and long-horizon work; route routine work to Opus 5.5 or Sonnet 5.5."
+    );
+  }
+  if (model === "opus") {
+    recommendations.push(
+      "Opus 5.5 runs adaptive thinking always on (thinking disabled and budget_tokens both return 400), and reasoning tokens bill as output. Effort is the only control: it defaults to medium; lower output_config.effort for routine turns.",
+      "Switching to Sonnet 5.5 for routine tasks saves 50% per token ($2/$10 vs $4/$20) with comparable quality for most coding work."
+    );
+  }
+  if (model === "opus-5") {
+    recommendations.push(
+      "Opus 5 is legacy: Opus 5.5 costs 20% less per token ($4/$20 vs $5/$25), though thinking cannot be disabled there, so re-baseline after migrating. On Opus 5, adaptive thinking is on by default and reasoning tokens bill as output. Lower output_config.effort for routine turns, or set thinking to disabled (legal only at effort high or below)."
+    );
+  }
+
+  return {
+    model,
+    turns,
+    breakdown: {
+      system_prompt_tokens: systemPromptTokens,
+      claude_md_tokens_per_turn: claudeMdTokens,
+      mcp_schema_tokens_per_turn: mcpSchemaTokens,
+      avg_history_tokens_per_turn: Math.round(((turns - 1) * 1500) / 2),
+      output_tokens_per_turn: 500,
+    },
+    totals: {
+      total_input_tokens: totalInputTokens,
+      total_output_tokens: totalOutputTokens,
+      input_cost: formatUsd(totalInputCost),
+      output_cost: formatUsd(totalOutputCost),
+      total_cost: formatUsd(totalCost),
+    },
+    recommendations,
+  };
+}
+
+function compareModels(args: {
+  input_tokens: number;
+  output_tokens: number;
+}): object {
+  const { input_tokens, output_tokens } = args;
+
+  const results: Record<
+    string,
+    { input_cost: string; output_cost: string; total: string; total_raw: number }
+  > = {};
+
+  for (const [name, pricing] of Object.entries(PRICING)) {
+    // input_tokens is treated as one request's prompt, which sets Haiku 5.5's tier.
+    const rates = ratesFor(pricing, input_tokens);
+    const ic = costForTokens(input_tokens, rates.inputPerMillion);
+    const oc = costForTokens(output_tokens, rates.outputPerMillion);
+    results[name] = {
+      input_cost: formatUsd(ic),
+      output_cost: formatUsd(oc),
+      total: formatUsd(ic + oc),
+      total_raw: ic + oc,
+    };
+  }
+
+  // Determine cheapest
+  const sorted = Object.entries(results).sort(
+    ([, a], [, b]) => a.total_raw - b.total_raw
+  );
+  const cheapest = sorted[0][0];
+  const mostExpensive = sorted.at(-1) ?? sorted[0];
+
+  const comparison = Object.fromEntries(
+    Object.entries(results).map(([name, data]) => [
+      name,
+      {
+        input_cost: data.input_cost,
+        output_cost: data.output_cost,
+        total: data.total,
+      },
+    ])
+  );
+
+  return {
+    input_tokens,
+    output_tokens,
+    comparison,
+    cheapest_model: cheapest,
+    savings_vs_most_expensive: pctSaving(
+      mostExpensive[1].total_raw,
+      sorted[0][1].total_raw
+    ),
+  };
+}
+
+// -------------------------------------------------------------------
+// MCP Server setup
+// -------------------------------------------------------------------
+
+const server = new Server(
+  { name: "cost-estimator", version: "1.0.0" },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler(ListToolsRequestSchema, () => ({
+  tools: [
+    {
+      name: "estimate_cost",
+      description:
+        "Estimate token count and cost for a given text. Optionally project cost over multiple turns.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          text: {
+            type: "string",
+            description: "The text to estimate tokens for",
+          },
+          model: {
+            type: "string",
+            enum: MODEL_IDS,
+            description:
+              'Claude model (default: sonnet). "opus" is Opus 5.5, "opus-5" is legacy Opus 5, "sonnet" is Sonnet 5.5, "sonnet-5" is legacy Sonnet 5, "fable" is Fable 5.1.',
+          },
+          turns: {
+            type: "number",
+            description:
+              "Number of conversation turns to project cost over (optional)",
+          },
+        },
+        required: ["text"],
+      },
+    },
+    {
+      name: "session_estimate",
+      description:
+        "Estimate total cost for a Claude Code session based on turn count, CLAUDE.md size, and MCP server count.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          turns: {
+            type: "number",
+            description: "Number of conversation turns",
+          },
+          model: {
+            type: "string",
+            enum: MODEL_IDS,
+            description:
+              'Claude model (default: sonnet). "opus" is Opus 5.5, "opus-5" is legacy Opus 5, "sonnet" is Sonnet 5.5, "sonnet-5" is legacy Sonnet 5, "fable" is Fable 5.1.',
+          },
+          claude_md_lines: {
+            type: "number",
+            description: "Number of lines in your CLAUDE.md file (default: 0)",
+          },
+          mcp_servers: {
+            type: "number",
+            description:
+              "Number of configured MCP servers (default: 0). Modeled at ~1,500 tokens each, an assumption that fits only when tool search is off; with tool search on (the default) only tool names and server instructions load.",
+          },
+        },
+        required: ["turns"],
+      },
+    },
+    {
+      name: "compare_models",
+      description:
+        "Compare cost across Fable 5.1, Fable 5, Opus 5.5, legacy Opus snapshots (Opus 5, 4.8, 4.7, 4.6), Sonnet 5.5, Sonnet 5, Sonnet 4.6, Haiku 5.5, and legacy Haiku 4.5 for a given token count, treated as one request (so Haiku 5.5 pays its $0.50/$2.50 tier when input_tokens is over 100,000). Shows which model is cheapest and savings percentages.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_tokens: {
+            type: "number",
+            description: "Number of input tokens",
+          },
+          output_tokens: {
+            type: "number",
+            description: "Number of output tokens",
+          },
+        },
+        required: ["input_tokens", "output_tokens"],
+      },
+    },
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, (request) => {
+  const { name, arguments: args } = request.params;
+
+  try {
+    let result: object;
+
+    switch (name) {
+      case "estimate_cost":
+        result = estimateCost(args as Parameters<typeof estimateCost>[0]);
+        break;
+      case "session_estimate":
+        result = sessionEstimate(args as Parameters<typeof sessionEstimate>[0]);
+        break;
+      case "compare_models":
+        result = compareModels(args as Parameters<typeof compareModels>[0]);
+        break;
+      default:
+        return {
+          content: [
+            { type: "text" as const, text: `Unknown tool: ${name}` },
+          ],
+          isError: true,
+        };
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(result, null, 2) },
+      ],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      content: [{ type: "text" as const, text: `Error: ${message}` }],
+      isError: true,
+    };
+  }
+});
+
+try {
+  await server.connect(new StdioServerTransport());
+} catch (err) {
+  console.error("Fatal error:", err);
+  process.exit(1);
+}

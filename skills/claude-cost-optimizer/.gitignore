@@ -1,0 +1,43 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.local
+.pytest_cache/
+htmlcov/
+.coverage
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+*.log
+
+# Site build artifacts
+site/node_modules/
+site/dist/
+*.tsbuildinfo
+
+# VS Code extension build artifacts
+tools/vscode-extension/node_modules/
+tools/vscode-extension/out/
+tools/vscode-extension/*.vsix
+
+# MCP server build artifacts
+tools/mcp-cost-server/node_modules/
+tools/mcp-cost-server/dist/
+
+# Hook temp files
+/tmp/claude-budget/
+
+# Added for consistency
+.env.*.local
+
+# Local Claude Code dev-preview config
+.claude/launch.json

@@ -1,0 +1,207 @@
+/**
+ * Cost estimation logic for Claude API token counts and pricing.
+ *
+ * Token estimation uses character-based heuristics rather than a real
+ * tokenizer. This keeps the extension dependency-free and fast, at the
+ * cost of accuracy: the ratios are not calibrated against Claude's tokenizer
+ * (Anthropic: about 2.5 characters per token on Claude 4.7 and later).
+ */
+
+export interface CostBreakdown {
+  tokens: number;
+  inputCostPerTurn: number;
+  outputEstimatePerTurn: number;
+  totalPerTurn: number;
+  totalForSession: number;
+  turns: number;
+  model: string;
+}
+
+/** Per-1M-token pricing verified 2026-10-09. */
+export const PRICING: Record<string, { input: number; output: number }> = {
+  fable: { input: 10, output: 50 },
+  "fable-5": { input: 10, output: 50 },
+  // "opus" is Opus 5.5 (released 2026-09-22): $4/$20, 20% below Opus 5.
+  opus: { input: 4, output: 20 },
+  "opus-5": { input: 5, output: 25 },
+  "opus-4.8": { input: 5, output: 25 },
+  "opus-4.7": { input: 5, output: 25 },
+  "opus-4.6": { input: 5, output: 25 },
+  // "sonnet" is Sonnet 5.5 (released 2026-09-28), the same $2/$10 as Sonnet 5.
+  // $2/$10 is Sonnet 5's permanent standard price -- the increase to $3/$15
+  // scheduled for 2026-09-01 was cancelled. Sonnet 4.6 stays at $3/$15.
+  sonnet: { input: 2, output: 10 },
+  "sonnet-5": { input: 2, output: 10 },
+  "sonnet-4.6": { input: 3, output: 15 },
+  // "haiku" is Haiku 5.5 (released 2026-10-07): $0.10/$0.50 up to 100,000 prompt
+  // tokens; LONG_PROMPT_PRICING holds the rates above that. Haiku 4.5 is legacy.
+  haiku: { input: 0.1, output: 0.5 },
+  "haiku-4.5": { input: 1, output: 5 },
+};
+
+/**
+ * Prompt-length tiers. A request whose prompt is over `threshold` tokens,
+ * cache reads and writes included, pays these rates on the whole request.
+ * Only Haiku 5.5 has one.
+ */
+export const LONG_PROMPT_PRICING: Record<
+  string,
+  { threshold: number; input: number; output: number; cacheHit: number }
+> = {
+  haiku: { threshold: 100_000, input: 0.5, output: 2.5, cacheHit: 0.05 },
+};
+
+/**
+ * Cache-read price per 1M tokens.
+ *
+ * Three multipliers: 0.1x base input by default, 0.025x on Fable 5.1
+ * ($0.25/MTok), and 0.05x on Opus 5.5 ($0.20/MTok) and Sonnet 5.5
+ * ($0.10/MTok since 2026-10-07). Read this table rather than multiplying
+ * input by 0.1.
+ */
+export const CACHE_HIT_PRICING: Record<string, number> = {
+  fable: 0.25,
+  "fable-5": 1,
+  opus: 0.2,
+  "opus-5": 0.5,
+  "opus-4.8": 0.5,
+  "opus-4.7": 0.5,
+  "opus-4.6": 0.5,
+  sonnet: 0.1,
+  "sonnet-5": 0.2,
+  "sonnet-4.6": 0.3,
+  haiku: 0.01,
+  "haiku-4.5": 0.1,
+};
+
+/** Friendly display names for each model tier. */
+export const MODEL_LABELS: Record<string, string> = {
+  fable: "Fable 5.1",
+  "fable-5": "Fable 5 (legacy)",
+  opus: "Opus 5.5",
+  "opus-5": "Opus 5 (legacy)",
+  "opus-4.8": "Opus 4.8 (legacy)",
+  "opus-4.7": "Opus 4.7 (legacy)",
+  "opus-4.6": "Opus 4.6 (legacy)",
+  sonnet: "Sonnet 5.5",
+  "sonnet-5": "Sonnet 5 (legacy)",
+  "sonnet-4.6": "Sonnet 4.6 (legacy)",
+  haiku: "Haiku 5.5",
+  "haiku-4.5": "Haiku 4.5 (legacy)",
+};
+
+/**
+ * Minimum cacheable prompt length per model, in tokens.
+ *
+ * A cache_control block on a prefix shorter than this is silently ignored:
+ * no error, no cache_creation_input_tokens, and full input price every turn.
+ */
+export const MIN_CACHE_TOKENS: Record<string, number> = {
+  fable: 512,
+  "fable-5": 512,
+  opus: 512,
+  "opus-5": 512,
+  "opus-4.8": 1024,
+  "opus-4.7": 2048,
+  "opus-4.6": 4096,
+  sonnet: 512,
+  "sonnet-5": 1024,
+  "sonnet-4.6": 1024,
+  haiku: 512,
+  "haiku-4.5": 4096,
+};
+
+/**
+ * Estimate token count from raw text.
+ *
+ * Heuristic: code averages ~4 characters per token, prose averages ~3.5.
+ * We detect "code-like" content by checking for common syntax characters
+ * and adjust the ratio accordingly.
+ */
+export function estimateTokens(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+
+  const codeIndicators = /[{}();=<>[\]|&^%$#@!~`]/g;
+  const matches = text.match(codeIndicators);
+  const codeRatio = matches ? matches.length / text.length : 0;
+
+  // Blend between prose (3.5 chars/token) and code (4.0 chars/token)
+  const charsPerToken = 3.5 + codeRatio * 2.5; // caps at ~4.5 for very dense code
+  const clampedCharsPerToken = Math.min(Math.max(charsPerToken, 3.5), 4.5);
+
+  return Math.ceil(text.length / clampedCharsPerToken);
+}
+
+/**
+ * Calculate cost in USD for a given token count, model, and direction.
+ *
+ * `promptTokens` is the size of the request's prompt and picks the price tier
+ * on a tiered model (Haiku 5.5); it defaults to `tokens`.
+ */
+export function calculateCost(
+  tokens: number,
+  model: string,
+  direction: "input" | "output",
+  promptTokens: number = tokens
+): number {
+  const tier = LONG_PROMPT_PRICING[model];
+  const pricing = tier && promptTokens > tier.threshold ? tier : PRICING[model];
+  if (!pricing) {
+    return 0;
+  }
+  const ratePerMillion = direction === "input" ? pricing.input : pricing.output;
+  return (tokens / 1_000_000) * ratePerMillion;
+}
+
+/**
+ * Estimate the per-turn cost of including a CLAUDE.md file in context.
+ *
+ * CLAUDE.md is sent as input on every turn. This function estimates how
+ * much that adds to a session of N turns, plus a rough output estimate
+ * (assuming ~500 output tokens per turn on average).
+ */
+export function estimatePerTurnCost(
+  claudeMdText: string,
+  turns: number,
+  model: string
+): CostBreakdown {
+  const tokens = estimateTokens(claudeMdText);
+  const inputCostPerTurn = calculateCost(tokens, model, "input");
+
+  // Rough average output per turn -- 500 tokens covers a typical response
+  const avgOutputTokens = 500;
+  const outputEstimatePerTurn = calculateCost(avgOutputTokens, model, "output", tokens);
+
+  const totalPerTurn = inputCostPerTurn + outputEstimatePerTurn;
+  const totalForSession = inputCostPerTurn * turns + outputEstimatePerTurn * turns;
+
+  return {
+    tokens,
+    inputCostPerTurn,
+    outputEstimatePerTurn,
+    totalPerTurn,
+    totalForSession,
+    turns,
+    model,
+  };
+}
+
+/**
+ * Format a USD cost for display.
+ * Shows 4 decimal places for sub-cent values, 2 otherwise.
+ */
+export function formatCost(cost: number): string {
+  if (cost < 0.01) {
+    return `$${cost.toFixed(4)}`;
+  }
+  return `$${cost.toFixed(2)}`;
+}
+
+/**
+ * Format a token count with thousands separators.
+ */
+export function formatTokens(tokens: number): string {
+  return tokens.toLocaleString("en-US");
+}

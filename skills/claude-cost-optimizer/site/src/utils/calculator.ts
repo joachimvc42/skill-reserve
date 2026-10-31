@@ -1,0 +1,428 @@
+import { type ModelId, type ModelPricing, MODELS, FAST_MODE_MULTIPLIER, TOKEN_ESTIMATES, ratesForPrompt, turnInputCost, formatRate } from './pricing'
+
+/** Fast Mode premium for a model -- per-model rate, falling back to the global default. */
+function fastModeMultiplier(model: ModelPricing): number {
+  return model.fastModeMultiplier ?? FAST_MODE_MULTIPLIER
+}
+
+export interface CalculatorInputs {
+  model: ModelId
+  turnsPerSession: number
+  claudeMdLines: number
+  sessionsPerDay: number
+  workingDaysPerMonth: number
+  mcpServers: number
+  fileReadsPerTurn: number
+  fastMode: boolean
+}
+
+export interface CostBreakdown {
+  claudeMd: number
+  mcp: number
+  fileReads: number
+  history: number
+  output: number
+}
+
+export interface CalculatorResult {
+  monthlyCost: number
+  optimizedCost: number
+  savings: number
+  savingsPercent: number
+  breakdown: CostBreakdown
+  optimizedBreakdown: CostBreakdown
+  recommendations: string[]
+  /** Per-turn cost of one session at the current settings (session-level, not monthly). */
+  perTurnCurrent: number[]
+}
+
+function computeSessionCost(
+  inputs: {
+    claudeMdLines: number
+    mcpServers: number
+    fileReadsPerTurn: number
+    turnsPerSession: number
+    fastMode: boolean
+  },
+  model: ModelId,
+): { total: number; breakdown: CostBreakdown; perTurn: number[] } {
+  const pricing = MODELS[model]
+  const t = TOKEN_ESTIMATES
+
+  const claudeMdTokens = inputs.claudeMdLines * t.tokensPerClaudeMdLine
+  const systemTokens = t.systemPromptTokens
+  const mcpTokens = inputs.mcpServers * t.tokensPerMcpServer
+  const fileTokensPerTurn = inputs.fileReadsPerTurn * t.tokensPerFileRead
+
+  const stableInputPerTurn = claudeMdTokens + systemTokens + mcpTokens
+
+  // Each turn is billed the way Claude Code caches a conversation (turnInputCost): the previous
+  // request is a cache read and only the new exchange is written. Costs accumulate per turn
+  // because a tiered model (Haiku 5.5) also prices each request by its own prompt length.
+  const multiplier = inputs.fastMode && pricing.fastModeCapable ? fastModeMultiplier(pricing) : 1
+  const breakdown: CostBreakdown = { claudeMd: 0, mcp: 0, fileReads: 0, history: 0, output: 0 }
+  const perTurn: number[] = []
+  let previousPrompt = 0
+
+  for (let turn = 0; turn < inputs.turnsPerSession; turn++) {
+    const historyTokens = turn * t.historyGrowthPerTurn
+    const prompt = stableInputPerTurn + fileTokensPerTurn + historyTokens
+    const { readDollars, writeDollars } = turnInputCost(pricing, prompt, previousPrompt)
+    const input = (readDollars + writeDollars) * multiplier
+    const output = (t.outputTokensPerTurn / 1_000_000) * ratesForPrompt(pricing, prompt).outputPer1M * multiplier
+    previousPrompt = prompt
+
+    // The system prompt has no category of its own, so input cost is shared over the four
+    // categories by their token share of this turn's prompt.
+    const parts = claudeMdTokens + mcpTokens + fileTokensPerTurn + historyTokens
+    if (parts > 0) {
+      breakdown.claudeMd += (input * claudeMdTokens) / parts
+      breakdown.mcp += (input * mcpTokens) / parts
+      breakdown.fileReads += (input * fileTokensPerTurn) / parts
+      breakdown.history += (input * historyTokens) / parts
+    }
+    breakdown.output += output
+    perTurn.push(input + output)
+  }
+
+  const total = perTurn.reduce((sum, cost) => sum + cost, 0)
+  return { total, breakdown, perTurn }
+}
+
+/** Session cost at the current settings if run on `model` (Fast Mode only applies when the model supports it). */
+export function sessionCostForModel(inputs: CalculatorInputs, model: ModelId): number {
+  return computeSessionCost(
+    {
+      claudeMdLines: inputs.claudeMdLines,
+      mcpServers: inputs.mcpServers,
+      fileReadsPerTurn: inputs.fileReadsPerTurn,
+      turnsPerSession: inputs.turnsPerSession,
+      fastMode: inputs.fastMode && MODELS[model].fastModeCapable,
+    },
+    model,
+  ).total
+}
+
+export function calculate(inputs: CalculatorInputs): CalculatorResult {
+  const sessionsPerMonth = inputs.sessionsPerDay * inputs.workingDaysPerMonth
+
+  const current = computeSessionCost(
+    {
+      claudeMdLines: inputs.claudeMdLines,
+      mcpServers: inputs.mcpServers,
+      fileReadsPerTurn: inputs.fileReadsPerTurn,
+      turnsPerSession: inputs.turnsPerSession,
+      fastMode: inputs.fastMode,
+    },
+    inputs.model,
+  )
+
+  const optimizedClaudeMdLines = Math.min(inputs.claudeMdLines, 80)
+  const optimizedFileReads = Math.round(inputs.fileReadsPerTurn * 0.7)
+
+  // If Opus or Sonnet, 30% of work delegated to Haiku 5.5
+  const isHaiku = inputs.model === 'haiku-5-5' || inputs.model === 'haiku'
+  const haikuFraction = isHaiku ? 0 : 0.3
+  const primaryFraction = 1 - haikuFraction
+
+  const optimizedPrimary = computeSessionCost(
+    {
+      claudeMdLines: optimizedClaudeMdLines,
+      mcpServers: inputs.mcpServers,
+      fileReadsPerTurn: optimizedFileReads,
+      turnsPerSession: Math.round(inputs.turnsPerSession * primaryFraction),
+      fastMode: false,
+    },
+    inputs.model,
+  )
+
+  let optimizedHaiku = {
+    total: 0,
+    breakdown: { claudeMd: 0, mcp: 0, fileReads: 0, history: 0, output: 0 },
+    perTurn: [] as number[],
+  }
+  if (haikuFraction > 0) {
+    optimizedHaiku = computeSessionCost(
+      {
+        claudeMdLines: optimizedClaudeMdLines,
+        mcpServers: inputs.mcpServers,
+        fileReadsPerTurn: optimizedFileReads,
+        turnsPerSession: Math.round(inputs.turnsPerSession * haikuFraction),
+        fastMode: false,
+      },
+      'haiku-5-5',
+    )
+  }
+
+  const monthlyCost = current.total * sessionsPerMonth
+  const optimizedSessionCost = optimizedPrimary.total + optimizedHaiku.total
+  const optimizedCost = optimizedSessionCost * sessionsPerMonth
+  const savings = monthlyCost - optimizedCost
+  const savingsPercent = monthlyCost > 0 ? (savings / monthlyCost) * 100 : 0
+
+  const optimizedBreakdown: CostBreakdown = {
+    claudeMd: (optimizedPrimary.breakdown.claudeMd + optimizedHaiku.breakdown.claudeMd) * sessionsPerMonth,
+    mcp: (optimizedPrimary.breakdown.mcp + optimizedHaiku.breakdown.mcp) * sessionsPerMonth,
+    fileReads: (optimizedPrimary.breakdown.fileReads + optimizedHaiku.breakdown.fileReads) * sessionsPerMonth,
+    history: (optimizedPrimary.breakdown.history + optimizedHaiku.breakdown.history) * sessionsPerMonth,
+    output: (optimizedPrimary.breakdown.output + optimizedHaiku.breakdown.output) * sessionsPerMonth,
+  }
+
+  const monthlyBreakdown: CostBreakdown = {
+    claudeMd: current.breakdown.claudeMd * sessionsPerMonth,
+    mcp: current.breakdown.mcp * sessionsPerMonth,
+    fileReads: current.breakdown.fileReads * sessionsPerMonth,
+    history: current.breakdown.history * sessionsPerMonth,
+    output: current.breakdown.output * sessionsPerMonth,
+  }
+
+  const recommendations = generateRecommendations(inputs, monthlyBreakdown, monthlyCost)
+
+  return {
+    monthlyCost,
+    optimizedCost,
+    savings,
+    savingsPercent,
+    breakdown: monthlyBreakdown,
+    optimizedBreakdown,
+    recommendations,
+    perTurnCurrent: current.perTurn,
+  }
+}
+
+const HAIKUS: ReadonlySet<ModelId> = new Set<ModelId>(['haiku-5-5', 'haiku'])
+
+function generateRecommendations(
+  inputs: CalculatorInputs,
+  breakdown: CostBreakdown,
+  _totalCost: number,
+): string[] {
+  const recs: { text: string; impact: number }[] = []
+
+  if (inputs.claudeMdLines > 80) {
+    const savingsPct = ((inputs.claudeMdLines - 80) / inputs.claudeMdLines) * (breakdown.claudeMd / Object.values(breakdown).reduce((a, b) => a + b, 0)) * 100
+    recs.push({
+      text: `Trim CLAUDE.md from ${inputs.claudeMdLines} to 80 lines -- saves ~${savingsPct < 1 ? savingsPct.toFixed(1) : Math.round(savingsPct)}% of session cost (it is a cache read on every turn after the first)`,
+      impact: savingsPct,
+    })
+  }
+
+  if (inputs.fastMode) {
+    const mult = MODELS[inputs.model].fastModeMultiplier ?? FAST_MODE_MULTIPLIER
+    const savePct = Math.round(((mult - 1) / mult) * 100)
+    recs.push({
+      text: `Disable Fast Mode -- saves ${savePct}% by removing the ${mult}x multiplier`,
+      impact: savePct,
+    })
+  }
+
+  if (!HAIKUS.has(inputs.model)) {
+    recs.push({
+      text: `Delegate simple tasks (tests, docs, formatting) to Haiku 5.5 subagents -- $0.10/$0.50 per 1M while each prompt stays under 100K tokens, 20x below Sonnet 5.5`,
+      impact: 30,
+    })
+  }
+
+  if (inputs.fileReadsPerTurn > 1) {
+    recs.push({
+      text: `Add permissions.deny Read(...) rules for build output, lock files and vendored code so Claude's file tools skip them (${inputs.fileReadsPerTurn} reads per turn now). Note: Claude Code does not read a .claudeignore file`,
+      impact: 10,
+    })
+  }
+
+  if (inputs.turnsPerSession > 20) {
+    recs.push({
+      text: `Use Plan Mode to reduce back-and-forth -- ${inputs.turnsPerSession} turns/session causes high history costs`,
+      impact: 20,
+    })
+  }
+
+  if (inputs.mcpServers > 3) {
+    recs.push({
+      text: `Disable unused MCP servers with /mcp (${inputs.mcpServers} configured). With tool search on, the default, each adds its tool names and instructions; full schemas load only when tool search is off. CLI tools like gh add nothing`,
+      impact: 8,
+    })
+  }
+
+  recs.push(...modelRecommendations(inputs))
+
+  recs.sort((a, b) => b.impact - a.impact)
+  return recs.slice(0, 3).map((r) => r.text)
+}
+
+const pctBelow = (cheaper: number, dearer: number) => Math.round((1 - cheaper / dearer) * 100)
+
+/** Recommendations that depend on which model is selected. */
+function modelRecommendations(inputs: CalculatorInputs): { text: string; impact: number }[] {
+  const recs: { text: string; impact: number }[] = []
+
+  // Ratios are computed from MODELS, never hardcoded: the Opus flagship price
+  // moved on 2026-09-22, and every literal "60%" in this file went stale with it.
+  const model = MODELS[inputs.model]
+  const opusFlagship = MODELS['opus-5-5']
+  const sonnetFlagship = MODELS['sonnet-5-5']
+
+  const isFableTier =
+    inputs.model === 'fable-5-1' ||
+    inputs.model === 'fable-5' ||
+    inputs.model === 'mythos-5-1' ||
+    inputs.model === 'mythos-5'
+  if (isFableTier) {
+    const ratio = (model.inputPer1M / opusFlagship.inputPer1M).toFixed(1).replace(/\.0$/, '')
+    recs.push({
+      text: `Fable-tier costs ${ratio}x Opus 5.5 ($${model.inputPer1M}/$${model.outputPer1M} vs $${opusFlagship.inputPer1M}/$${opusFlagship.outputPer1M}). Reserve it for the hardest reasoning and route routine work to Opus 5.5 or Sonnet 5 -- saves ${pctBelow(opusFlagship.inputPer1M, model.inputPer1M)}%+ on those turns`,
+      impact: 50,
+    })
+  }
+
+  // Fable 5 -> 5.1 is the same posted price with a 4x cheaper cache read, so on
+  // any cached workload it is a strict win with no quality tradeoff.
+  if (inputs.model === 'fable-5' || inputs.model === 'mythos-5') {
+    recs.push({
+      text: 'Migrate to Fable 5.1 -- same $10/$50, but cache reads drop from $1.00 to $0.25 per 1M (0.025x vs 0.1x). Free savings on every cached turn',
+      impact: 45,
+    })
+  }
+
+  const isOpusTier =
+    inputs.model === 'opus-5-5' ||
+    inputs.model === 'opus-5' ||
+    inputs.model === 'opus-4-8' ||
+    inputs.model === 'opus-4-7' ||
+    inputs.model === 'opus-4-6'
+  if (isOpusTier && !inputs.fastMode) {
+    recs.push({
+      text: `Consider Sonnet 5.5 for routine development -- ${pctBelow(sonnetFlagship.inputPer1M, model.inputPer1M)}% cheaper ($${sonnetFlagship.inputPer1M}/$${sonnetFlagship.outputPer1M} vs $${model.inputPer1M}/$${model.outputPer1M}) with similar quality for most tasks`,
+      impact: pctBelow(sonnetFlagship.inputPer1M, model.inputPer1M),
+    })
+  }
+
+  // Every legacy Opus snapshot is on $5/$25; Opus 5.5 is $4/$20 with a 0.05x cache
+  // read, so upgrading is a price cut on both input and every cached turn.
+  const legacyOpus =
+    inputs.model === 'opus-5' ||
+    inputs.model === 'opus-4-8' ||
+    inputs.model === 'opus-4-7' ||
+    inputs.model === 'opus-4-6'
+  if (legacyOpus) {
+    const cacheFloorNote =
+      model.minCacheTokens > opusFlagship.minCacheTokens
+        ? `, and its minimum cacheable prompt is ${opusFlagship.minCacheTokens} tokens instead of ${model.minCacheTokens.toLocaleString()}`
+        : ''
+    recs.push({
+      text: `Migrate to Opus 5.5 -- ${pctBelow(opusFlagship.inputPer1M, model.inputPer1M)}% cheaper ($${opusFlagship.inputPer1M}/$${opusFlagship.outputPer1M} vs $${model.inputPer1M}/$${model.outputPer1M}), cache reads drop from $${model.cacheHitPer1M.toFixed(2)} to $${opusFlagship.cacheHitPer1M.toFixed(2)} per 1M${cacheFloorNote}. Check first: thinking cannot be disabled and forced tool_choice returns 400`,
+      impact: 30,
+    })
+  }
+
+  if (inputs.model === 'opus-5') {
+    recs.push({
+      text: 'On Opus 5 thinking is ON by default. If a task does not need it, send thinking {type:"disabled"} at effort high or below -- reasoning tokens bill as output at $25/1M',
+      impact: 15,
+    })
+  }
+
+  if (inputs.model === 'opus-5-5') {
+    recs.push({
+      text: `On Opus 5.5 thinking cannot be turned off -- effort is the only dial. It defaults to medium; set effort low for routine turns, since reasoning tokens bill as output at $${model.outputPer1M}/1M`,
+      impact: 15,
+    })
+  }
+
+  if (model.minCacheTokens >= 4096) {
+    recs.push({
+      text: `${model.name} needs ${model.minCacheTokens.toLocaleString()}+ tokens before a prompt caches at all. Below that you pay full input price every turn -- Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1 cache from 512 tokens`,
+      impact: 12,
+    })
+  }
+
+  const sonnetMigration = legacySonnetRecommendation(inputs.model)
+  if (sonnetMigration) recs.push(sonnetMigration)
+  if (inputs.model === 'haiku') recs.push(haikuMigrationRecommendation())
+  const tierWarning = promptTierRecommendation(inputs)
+  if (tierWarning) recs.push(tierWarning)
+
+  return recs
+}
+
+function haikuMigrationRecommendation(): { text: string; impact: number } {
+  const legacy = MODELS.haiku
+  const target = MODELS['haiku-5-5']
+  return {
+    text: `Migrate to Haiku 5.5 -- ${formatRate(target.inputPer1M)}/${formatRate(target.outputPer1M)} per 1M vs ${formatRate(legacy.inputPer1M)}/${formatRate(legacy.outputPer1M)} while each prompt stays under 100K tokens (10x per token; it counts ~30% more tokens for the same text), with a 1M window and prompts caching from ${target.minCacheTokens} tokens instead of ${legacy.minCacheTokens.toLocaleString()}. Check first: budget_tokens, sampling params and prefill return 400`,
+    impact: 40,
+  }
+}
+
+/** Warn when later turns cross a tiered model's prompt-length line (Haiku 5.5: 100K). */
+function promptTierRecommendation(inputs: CalculatorInputs): { text: string; impact: number } | null {
+  const tier = MODELS[inputs.model].longPrompt
+  if (!tier) return null
+  const t = TOKEN_ESTIMATES
+  const basePrompt =
+    inputs.claudeMdLines * t.tokensPerClaudeMdLine +
+    t.systemPromptTokens +
+    inputs.mcpServers * t.tokensPerMcpServer +
+    inputs.fileReadsPerTurn * t.tokensPerFileRead
+  // Turn index n carries basePrompt + n * growth tokens; prices switch only once that is strictly
+  // over the threshold, so the first such n is floor((threshold - base) / growth) + 1.
+  const firstTurnOver = Math.max(0, Math.floor((tier.threshold - basePrompt) / t.historyGrowthPerTurn) + 1)
+  if (firstTurnOver >= inputs.turnsPerSession) return null
+  return {
+    text: `From turn ${firstTurnOver + 1} the prompt passes ${tier.threshold.toLocaleString()} tokens, so every request after that pays ${formatRate(tier.inputPer1M)}/${formatRate(tier.outputPer1M)} instead of ${formatRate(MODELS[inputs.model].inputPer1M)}/${formatRate(MODELS[inputs.model].outputPer1M)} (5x). Run /compact or /clear before then`,
+    impact: 35,
+  }
+}
+
+// Sonnet 5.5 is the same $2/$10 as Sonnet 5 (with half its cache-read price) and a
+// third below Sonnet 4.6 / 4.5's $3/$15, with a 512-token cache floor, so moving up
+// is always a price cut.
+const LEGACY_SONNETS: ReadonlySet<ModelId> = new Set<ModelId>(['sonnet-5', 'sonnet', 'sonnet-4-5'])
+
+function legacySonnetRecommendation(id: ModelId): { text: string; impact: number } | null {
+  if (!LEGACY_SONNETS.has(id)) return null
+  const model = MODELS[id]
+  const target = MODELS['sonnet-5-5']
+  const saving = pctBelow(target.inputPer1M, model.inputPer1M)
+  const cacheNote =
+    target.cacheHitPer1M < model.cacheHitPer1M
+      ? ` with cache reads at $${target.cacheHitPer1M.toFixed(2)} vs $${model.cacheHitPer1M.toFixed(2)}`
+      : ''
+  const price =
+    saving > 0
+      ? `${saving}% cheaper ($${target.inputPer1M}/$${target.outputPer1M} vs $${model.inputPer1M}/$${model.outputPer1M})${cacheNote}`
+      : `the same $${target.inputPer1M}/$${target.outputPer1M}${cacheNote}`
+  return {
+    text: `Migrate to Sonnet 5.5 -- ${price}, and prompts cache from ${target.minCacheTokens} tokens instead of ${model.minCacheTokens.toLocaleString()}. Check first: thinking {type:"disabled"} returns 400 (send between_tools) and forced tool_choice returns 400`,
+    impact: saving > 0 ? 30 : 10,
+  }
+}
+
+export function resultToMarkdown(inputs: CalculatorInputs, result: CalculatorResult): string {
+  const model = MODELS[inputs.model]
+  const lines = [
+    `## Claude Cost Estimate`,
+    ``,
+    `**Model:** ${model.name}${inputs.fastMode ? ' (Fast Mode)' : ''}`,
+    `**Sessions:** ${inputs.sessionsPerDay}/day x ${inputs.workingDaysPerMonth} days = ${inputs.sessionsPerDay * inputs.workingDaysPerMonth}/month`,
+    `**Turns/session:** ${inputs.turnsPerSession}`,
+    ``,
+    `| Category | Current | Optimized |`,
+    `|----------|--------:|----------:|`,
+    `| CLAUDE.md | $${result.breakdown.claudeMd.toFixed(2)} | $${result.optimizedBreakdown.claudeMd.toFixed(2)} |`,
+    `| MCP servers | $${result.breakdown.mcp.toFixed(2)} | $${result.optimizedBreakdown.mcp.toFixed(2)} |`,
+    `| File reads | $${result.breakdown.fileReads.toFixed(2)} | $${result.optimizedBreakdown.fileReads.toFixed(2)} |`,
+    `| History | $${result.breakdown.history.toFixed(2)} | $${result.optimizedBreakdown.history.toFixed(2)} |`,
+    `| Output | $${result.breakdown.output.toFixed(2)} | $${result.optimizedBreakdown.output.toFixed(2)} |`,
+    `| **Total** | **$${result.monthlyCost.toFixed(2)}** | **$${result.optimizedCost.toFixed(2)}** |`,
+    ``,
+    `**Savings: $${result.savings.toFixed(2)}/month (${Math.round(result.savingsPercent)}%)**`,
+    ``,
+    `### Recommendations`,
+    ...result.recommendations.map((r) => `- ${r}`),
+    ``,
+    `---`,
+    `*Generated by [Claude Cost Optimizer](https://sagargupta16.github.io/claude-cost-optimizer/calculator)*`,
+  ]
+  return lines.join('\n')
+}

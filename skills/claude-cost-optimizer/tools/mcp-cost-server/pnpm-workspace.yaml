@@ -1,0 +1,20 @@
+# pnpm settings live here as of pnpm 11 -- the "pnpm" field in package.json is
+# no longer read (pnpm warns "keys were ignored" and silently drops it), which
+# is how the ip-address and hono pins below previously stopped taking effect.
+#
+# These are transitive dependencies of @modelcontextprotocol/sdk. Each floor is
+# the first patched version from the corresponding Dependabot advisory; keep the
+# comment when bumping so the reason survives.
+overrides:
+  # SSRF / trust-boundary bypasses: octal octet decoding, IPv4-mapped IPv6
+  # misclassification, CIDR-suffix suppression of special-use checks,
+  # cross-family isInSubnet() matches, unbounded Address6 parse diagnostic
+  ip-address: '>=10.7.1'
+  # host confusion via backslash authority introducer, host case normalization
+  # via percent-encoded octets, mailto header injection
+  fast-uri: '>=4.1.5'
+  # CORS ReDoS, language-middleware DoS, memo() SSR cross-user disclosure,
+  # Connection-header leak in the proxy helper, hono/jsx boundary XSS
+  hono: '>=4.13.7'
+  # serve-static path traversal on Windows via encoded backslash
+  '@hono/node-server': '>=1.19.15'

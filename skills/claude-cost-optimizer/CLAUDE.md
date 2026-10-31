@@ -1,0 +1,71 @@
+# CLAUDE.md - claude-cost-optimizer
+
+> This file stacks on top of the workspace root at `C:\Code\GitHub\`:
+> - Root [`CLAUDE.md`](../../CLAUDE.md) -- voice, rules, routing map, references, skills, slash commands, conventions.
+> - Root [`MEMORY.md`](../../MEMORY.md) -- live facts across repos.
+> - Root [`STATUS.md`](../../STATUS.md) -- live PR/CI/security dashboard.
+> - [`.claude/resources/`](../../.claude/resources/README.md) -- deep reference for collaboration, workflow, git, OSS, debugging, voice.
+>
+> Read those first. The guidance below only adds **repo-specific context** -- it does not override anything in the root.
+
+## Purpose
+
+This repo is an installable Claude Code skill and a documentation/tooling project for reducing Claude Code costs. Install: `npx skills add Sagargupta16/claude-cost-optimizer`.
+
+## File Structure
+
+- `skills/cost-mode/` - The installable skill; `SKILL.md` is the source of truth
+- `plugins/`, `.claude-plugin/`, `.agents/plugins/` - Distribution copies and registries
+- `guides/` - Deep-dive guides 00-11 + `diagrams.md`
+- `benchmarks/`, `templates/`, `cheatsheet.md` - Measurements, configs, quick reference
+- `tools/` - 8 CLI tools; see [`tools/README.md`](tools/README.md) for the list
+- `hooks/` - Budget-enforcement and cost-logging hooks (wired up in `.claude/settings.json`)
+- `site/` - React + Vite + TS site (calculator, badge checker, analyzer) on GitHub Pages
+- `case-studies/` - Submission template only; no stories published yet
+- `docs/pricing-data.md` - Pricing source of truth; `docs/pricing-reference.md` - the user-facing pricing tables and migration notes (moved out of the README)
+- `docs/diagrams/` - The README's toolkit map: orrery spec `toolkit.yaml` and the light/dark SVGs rendered from it; re-render after adding or moving a tool
+- `scripts/` - Consistency checks run by CI (`check-rate-values.py` compares every code copy of the rates against `rate.py`), plus `capture-screenshots.py` for the README images and the social preview
+- Tests: `site/src/utils/*.test.ts` (vitest, `npm test`), `tools/claude-rate/tests/` (unittest), `tools/mcp-cost-server/test/` (node:test over stdio)
+
+## Writing Conventions
+
+- Use plain, direct language. Avoid filler and marketing speak.
+- All cost claims must include expected savings percentages and evidence.
+- Keep markdown files well-structured with clear headings.
+- Tables are preferred over long prose for comparisons and data.
+- Code examples should be copy-pasteable and tested.
+
+## Python Tools
+
+- Target Python 3.10+.
+- Use only standard library plus tiktoken (for token-estimator).
+- Include argparse, shebang lines, and docstrings.
+- Handle errors gracefully with clear messages.
+
+## Pricing Data
+
+Rates, model IDs, context windows, cache behaviour, and retirement dates live in
+[`docs/pricing-data.md`](docs/pricing-data.md) -- the source of truth. Read it before changing any
+rate or model list. It is separate because this file loads in full every session, so a smaller
+one costs fewer tokens and is followed better (Anthropic's guidance: under 200 lines).
+
+Verified **2026-10-09**. The facts most often got wrong:
+
+- **Opus 5.5 ($4/$20) is the current Opus flagship**; Opus 5 ($5/$25) is legacy.
+- **Sonnet 5.5 ($2/$10) is the current Sonnet flagship.** Sonnet 5 (legacy) has the same $2/$10,
+  permanently (the rise to $3/$15 was cancelled), but Sonnet 5.5's cache read is half: $0.10 vs $0.20.
+- **Haiku 5.5 is priced by prompt length**: $0.10/$0.50 up to 100,000 prompt tokens (cache reads
+  and writes count), $0.50/$2.50 above, on the whole request. Never quote one Haiku 5.5 rate.
+- **Cache hit has three multipliers: 0.1x base input, except Fable 5.1 and Mythos 5.1 (0.025x)
+  and Opus 5.5 and Sonnet 5.5 (0.05x).** Never derive a cache rate as `input * 0.1`; read the per-model rate.
+- **Session estimates are cache-aware.** The calculator, repo analyzer, claude-rate and the MCP server
+  bill each turn the way Claude Code caches: the previous request is a cache read, only the new part a
+  5-minute write (1.25x); turn 1 writes everything. Never reintroduce a flat "70% cache hit" rate.
+- **The 4.7+ tokenizer makes about 30% more tokens** (pricing page); every such model uses 1.3.
+  Sonnet 4.6 and earlier use the old tokenizer. Opus 4.5 cut $15/$75 to $5/$25, so Opus 5.5 is not
+  the first Opus price cut.
+- **No vague ranges.** Every saving is a sourced or computed number with its source or formula.
+
+After a rate change, update every file listed at the end of that doc, then run
+`python scripts/check-pricing-sync.py` and `python scripts/check-rate-values.py`. CI runs both on every PR.
+

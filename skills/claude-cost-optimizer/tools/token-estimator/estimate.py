@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""
+Token Estimator for Claude Code
+
+Estimates token count for a file or text input and calculates
+cost across Claude models (Fable, Opus, Sonnet, Haiku).
+
+Usage:
+    python estimate.py path/to/file.py
+    echo "some text" | python estimate.py -
+    python estimate.py path/to/CLAUDE.md --per-turn 50
+    python estimate.py path/to/file.py --model opus
+"""
+
+import argparse
+import os
+import sys
+
+try:
+    import tiktoken
+except ImportError:
+    print(
+        "Error: tiktoken is required. Install it with:\n  pip install tiktoken",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+# Claude model pricing per 1M tokens (verified 2026-10-09; Haiku 5.5 released 2026-10-07)
+# NOTE: 1M context on Fable 5.1/Fable 5/Opus 5.5/Opus 5/Opus 4.8/4.7/4.6/Sonnet 5.5/Sonnet 5/Sonnet 4.6
+# is billed at standard rates (no long-context premium). The old "2x over 200K" pricing
+# only applied to Opus 4.1 and older.
+# NOTE: cache_hit has three multipliers: 0.1x input by default, 0.025x on Fable 5.1 /
+# Mythos 5.1 ($0.25/MTok), and 0.05x on Opus 5.5 ($0.20/MTok) and Sonnet 5.5
+# ($0.10/MTok since 2026-10-07). Never derive a cache rate as input * 0.1.
+# NOTE: Haiku 5.5 is priced by prompt length. "long_prompt" holds the rates a
+# request pays when its prompt is over "threshold" tokens; calculate_cost picks
+# the tier from the size of one request, not from a multi-turn total.
+MODEL_PRICING = {
+    "fable": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_hit": 0.25,
+        "name": "Fable 5.1",
+        "note": (
+            "Most capable widely released model (released 2026-09-01). 2.5x Opus 5.5 pricing, "
+            "but cache reads are $0.25/MTok -- 0.025x base input, the deepest cache "
+            "discount in the lineup and a quarter of Fable 5. Always-on adaptive thinking; no Fast "
+            "Mode; no Priority Tier; Batch $5/$25. Forced tool_choice returns 400."
+        ),
+    },
+    "fable_5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_hit": 1.00,
+        "name": "Fable 5 (legacy)",
+        "note": (
+            "Superseded by Fable 5.1 at the same $10/$50. Cache reads cost $1.00/MTok "
+            "here versus $0.25 on Fable 5.1, so migrating is strictly cheaper when cached."
+        ),
+    },
+    "opus": {
+        "input": 4.00,
+        "output": 20.00,
+        "cache_hit": 0.20,
+        "name": "Opus 5.5",
+        "note": (
+            "Anthropic's recommended starting model for most workloads (released "
+            "2026-09-22). $4/$20 -- 20% below Opus 5 (Opus 4.5 made the earlier cut, "
+            "$15/$75 to $5/$25) -- with cache reads at $0.20/MTok, 0.05x base input (95% off). "
+            "Adaptive thinking is always on (thinking disabled and budget_tokens both "
+            "return 400) and reasoning tokens bill as output; effort defaults to "
+            "medium. Same tokenizer as Opus 4.7+ (about 30% more tokens than Opus "
+            "4.6). Batch $2/$10. Minimum cacheable prompt is 512 tokens."
+        ),
+    },
+    "opus_5": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "name": "Opus 5 (legacy)",
+        "note": (
+            "Previous Opus-tier flagship (GA 2026-07-24), moved to legacy by the Opus "
+            "5.5 launch; Opus 5.5 is 20% cheaper per token. Same posted rate as Opus "
+            "4.8, but thinking is ON by default and reasoning tokens bill as output, so "
+            "the effective cost runs higher until you lower output_config.effort. "
+            "Minimum cacheable prompt is 512 tokens."
+        ),
+    },
+    "opus_4_8": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "name": "Opus 4.8 (legacy)",
+        "note": (
+            "Same price as Opus 5. Still the server-side fallback target for Opus 5 "
+            "cyber-classifier refusals. Minimum cacheable prompt is 1,024 tokens."
+        ),
+    },
+    "opus_4_7": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "name": "Opus 4.7 (legacy)",
+    },
+    "opus_4_6": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_hit": 0.50,
+        "name": "Opus 4.6 (legacy)",
+    },
+    "sonnet": {
+        "input": 2.00,
+        "output": 10.00,
+        "cache_hit": 0.10,
+        "name": "Sonnet 5.5",
+        "note": (
+            "Current Sonnet-tier flagship (released 2026-09-28). Same $2/$10 and "
+            "tokenizer as Sonnet 5, with cache reads at $0.10 (0.05x, cut from $0.20 on "
+            "2026-10-07), half Sonnet 5's; half the price of Opus 5.5. Minimum cacheable prompt drops to 512 tokens. Adaptive "
+            "thinking on by default (effort defaults to high, recalibrated); thinking "
+            "disabled returns 400, the lowest setting is between_tools. Batch $1/$5."
+        ),
+    },
+    "sonnet_5": {
+        "input": 2.00,
+        "output": 10.00,
+        "cache_hit": 0.20,
+        "name": "Sonnet 5 (legacy)",
+        "note": (
+            "Previous Sonnet-tier flagship (GA 2026-06-30), moved to legacy by the "
+            "Sonnet 5.5 launch at the same price. $2/$10 is the permanent standard "
+            "price -- the increase to $3/$15 scheduled for 2026-09-01 was cancelled. "
+            "Minimum cacheable prompt is 1,024 tokens. Batch $1/$5."
+        ),
+    },
+    "sonnet_4_6": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_hit": 0.30,
+        "name": "Sonnet 4.6 (legacy)",
+    },
+    "haiku": {
+        "input": 0.10,
+        "output": 0.50,
+        "cache_hit": 0.01,
+        "name": "Haiku 5.5",
+        "long_prompt": {
+            "threshold": 100_000,
+            "input": 0.50,
+            "output": 2.50,
+            "cache_hit": 0.05,
+        },
+        "note": (
+            "Current Haiku (released 2026-10-07). Priced by prompt length: $0.10/$0.50 "
+            "up to 100,000 prompt tokens, $0.50/$2.50 above, on the whole request. "
+            "Counts here use cl100k; Haiku 5.5 counts ~30% more tokens than Haiku 4.5, "
+            "so treat a prompt near 100K as over the line. 1M context, 512-token cache "
+            "floor, adaptive thinking (effort defaults to medium). Batch $0.05/$0.25 in "
+            "the low tier."
+        ),
+    },
+    "haiku_4_5": {
+        "input": 1.00,
+        "output": 5.00,
+        "cache_hit": 0.10,
+        "name": "Haiku 4.5 (legacy)",
+        "note": (
+            "Legacy since the Haiku 5.5 launch (not deprecated). 200K context, 4,096-token "
+            "cache floor. Haiku 5.5 is 10x cheaper per token up to 100K prompt tokens."
+        ),
+    },
+    "fast_mode": {
+        "input": 8.00,
+        "output": 40.00,
+        "cache_hit": None,
+        "name": "Opus 5.5 (Fast Mode)",
+        "note": (
+            "Research preview, Claude API only. 2x Opus 5.5's own base rate ($8/$40), "
+            "which undercuts the $10/$50 Fast rate on Opus 5 and 4.8 (fast_mode_opus_5)."
+        ),
+    },
+    "fast_mode_opus_5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_hit": None,
+        "name": "Opus 5 / 4.8 (Fast Mode)",
+        "note": (
+            "Research preview. Flat 2x standard Opus 5 / 4.8 rates ($10/$50), "
+            "Claude API + Managed Agents. Not available with Batch API. "
+            "The old 6x tier is gone: Opus 4.7 errors on speed=fast, and Opus 4.6 "
+            "silently runs standard speed at standard rates."
+        ),
+    },
+    "mythos": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_hit": 0.25,
+        "name": "Mythos 5.1",
+        "note": (
+            "Fable 5.1 for organizations verified through Anthropic's verification "
+            "programs (e.g. the Cyber Verification Program): same specs and pricing, including the "
+            "$0.25/MTok (0.025x) cache read. Unlike Mythos 5 it runs access-program "
+            "safeguards, so refusals can occur. Listed for reference only. "
+            "(Mythos 5 reads at $1.00; Mythos Preview is deprecated.)"
+        ),
+    },
+}
+
+# ANSI color codes
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+RED = "\033[31m"
+RESET = "\033[0m"
+
+
+def supports_color() -> bool:
+    """Check if the terminal supports ANSI color codes."""
+    if os.getenv("NO_COLOR"):
+        return False
+    if os.getenv("FORCE_COLOR"):
+        return True
+    if not hasattr(sys.stdout, "isatty"):
+        return False
+    return sys.stdout.isatty()
+
+
+def c(code: str, text: str) -> str:
+    """Conditionally apply ANSI color code."""
+    if not supports_color():
+        return text
+    return f"{code}{text}{RESET}"
+
+
+def count_tokens(text: str) -> int:
+    """Count tokens using cl100k_base encoding (closest approximation for Claude)."""
+    encoder = tiktoken.get_encoding("cl100k_base")
+    return len(encoder.encode(text))
+
+
+def format_number(n: int) -> str:
+    """Format a number with comma separators."""
+    return f"{n:,}"
+
+
+def format_cost(cost: float) -> str:
+    """Format a dollar amount with appropriate precision."""
+    if cost < 0.01:
+        return f"${cost:.4f}"
+    if cost < 1.00:
+        return f"${cost:.3f}"
+    return f"${cost:.2f}"
+
+
+def rate_for(model: str, direction: str, prompt_tokens: int) -> float:
+    """Per-1M rate a request of `prompt_tokens` pays (Haiku 5.5 has two tiers)."""
+    info = MODEL_PRICING[model]
+    tier = info.get("long_prompt")
+    if tier and prompt_tokens > tier["threshold"]:
+        return tier[direction]
+    return info[direction]
+
+
+def calculate_cost(
+    token_count: int, model: str, direction: str = "input", prompt_tokens: int | None = None
+) -> float:
+    """Calculate cost for a given token count and model.
+
+    `prompt_tokens` is the size of one request and picks the price tier on a
+    tiered model; it defaults to `token_count` (a single request).
+    """
+    request = token_count if prompt_tokens is None else prompt_tokens
+    return (token_count / 1_000_000) * rate_for(model, direction, request)
+
+
+def read_input(source: str) -> str:
+    """Read text from a file path or stdin.
+
+    Reads are contained to the current directory tree or home directory.
+    """
+    if source == "-":
+        if sys.stdin.isatty():
+            print(
+                f"{c(DIM, 'Reading from stdin (Ctrl+D to finish)...')}",
+                file=sys.stderr,
+            )
+        return sys.stdin.read()
+
+    path = os.path.expanduser(source)
+    if not os.path.exists(path):
+        print(f"{c(RED, 'Error:')} File not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isfile(path):
+        print(f"{c(RED, 'Error:')} Not a file: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    resolved = os.path.realpath(path)
+    allowed_roots = (
+        os.path.realpath(os.getcwd()),
+        os.path.realpath(os.path.expanduser("~")),
+    )
+    if not any(
+        resolved == root or resolved.startswith(root + os.sep) for root in allowed_roots
+    ):
+        print(
+            f"{c(RED, 'Error:')} Refusing to read outside the current directory or home: {path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(resolved, "r", encoding="latin-1") as f:
+                return f.read()
+        except OSError as e:
+            print(
+                f"{c(RED, 'Error:')} Could not read file: {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    except PermissionError:
+        print(
+            f"{c(RED, 'Error:')} Permission denied: {path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except OSError as e:
+        print(f"{c(RED, 'Error:')} {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def print_header(source: str, token_count: int, line_count: int, char_count: int):
+    """Print the summary header."""
+    print()
+    print(c(BOLD, "  Token Estimate"))
+    print(c(DIM, "  " + "-" * 50))
+
+    label = "stdin" if source == "-" else os.path.basename(source)
+    print(f"  Source:     {c(CYAN, label)}")
+    print(f"  Lines:      {format_number(line_count)}")
+    print(f"  Characters: {format_number(char_count)}")
+    print(f"  Tokens:     {c(BOLD, format_number(token_count))}")
+    print()
+
+
+def print_cost_table(token_count: int, model_filter: str | None = None):
+    """Print per-model cost table for a single pass."""
+    models = (
+        {model_filter: MODEL_PRICING[model_filter]} if model_filter else MODEL_PRICING
+    )
+
+    print(c(BOLD, "  Cost Estimate (single input pass)"))
+    print(c(DIM, "  " + "-" * 50))
+    print(f"  {'Model':<14} {'Input Cost':>12} {'$/1M tokens':>14}")
+    print(f"  {'':.<14} {'':.<12} {'':.<14}")
+
+    for key, info in models.items():
+        cost = calculate_cost(token_count, key, "input")
+        price_label = "${:.2f}".format(rate_for(key, "input", token_count))
+        print(
+            f"  {info['name']:<14} {c(GREEN, format_cost(cost)):>22} "
+            f"{c(DIM, price_label):>23}"
+        )
+    print()
+
+
+def print_per_turn_table(token_count: int, turns: int, model_filter: str | None = None):
+    """Print cost projection over N turns."""
+    models = (
+        {model_filter: MODEL_PRICING[model_filter]} if model_filter else MODEL_PRICING
+    )
+
+    total_tokens = token_count * turns
+
+    print(c(BOLD, f"  Per-Turn Projection ({turns} turns)"))
+    print(c(DIM, "  " + "-" * 50))
+    print(f"  Tokens per turn:  {format_number(token_count)}")
+    print(f"  Total tokens:     {c(BOLD, format_number(total_tokens))}")
+    print()
+    print(f"  {'Model':<14} {'Total Cost':>12} {'Per Turn':>12}")
+    print(f"  {'':.<14} {'':.<12} {'':.<12}")
+
+    for key, info in models.items():
+        total_cost = calculate_cost(total_tokens, key, "input", prompt_tokens=token_count)
+        per_turn_cost = calculate_cost(token_count, key, "input")
+        print(
+            f"  {info['name']:<14} "
+            f"{c(YELLOW, format_cost(total_cost)):>22} "
+            f"{c(DIM, format_cost(per_turn_cost)):>21}"
+        )
+
+    print()
+    print(
+        c(
+            DIM,
+            "  Note: This estimates input cost only. CLAUDE.md and system prompt\n"
+            "  are loaded as input on every turn, making this a recurring cost.",
+        )
+    )
+    print()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Estimate token count and Claude API cost for a file or text.",
+        epilog=(
+            "Examples:\n"
+            "  %(prog)s CLAUDE.md\n"
+            "  %(prog)s CLAUDE.md --per-turn 50\n"
+            "  %(prog)s src/app.py --model haiku\n"
+            '  echo "Hello world" | %(prog)s -\n'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "source",
+        help='File path to analyze, or "-" to read from stdin',
+    )
+    parser.add_argument(
+        "--per-turn",
+        type=int,
+        metavar="N",
+        help="Project cost over N conversation turns (useful for CLAUDE.md analysis)",
+    )
+    parser.add_argument(
+        "--model",
+        choices=list(MODEL_PRICING.keys()),
+        default=None,
+        help=(
+            "Show cost for a specific model only (default: show all). "
+            "'opus' is Opus 5.5, the recommended default Opus. Use 'opus_5', "
+            "'opus_4_8', 'opus_4_7', or 'opus_4_6' for legacy Opus pricing. "
+            "'sonnet' is Sonnet 5.5; 'sonnet_5' is legacy Sonnet 5 at the same rate. "
+            "'haiku' is Haiku 5.5 (tiered at 100K prompt tokens); 'haiku_4_5' is legacy "
+            "Haiku 4.5. Use "
+            "'fast_mode' for Opus 5.5 Fast Mode ($8/$40) or 'fast_mode_opus_5' for "
+            "Opus 5 / 4.8 Fast Mode ($10/$50); both are 2x their own base rate (the "
+            "old 6x tier no longer exists)."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
+
+    args = parser.parse_args()
+
+    # Validate --per-turn
+    if args.per_turn is not None and args.per_turn < 1:
+        parser.error("--per-turn must be a positive integer")
+
+    # Read and count
+    text = read_input(args.source)
+    token_count = count_tokens(text)
+    line_count = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+    char_count = len(text)
+
+    # JSON output mode
+    if args.json:
+        import json
+
+        result = {
+            "source": args.source,
+            "tokens": token_count,
+            "lines": line_count,
+            "characters": char_count,
+            "costs": {},
+        }
+        models = (
+            {args.model: MODEL_PRICING[args.model]} if args.model else MODEL_PRICING
+        )
+        for key, info in models.items():
+            entry = {
+                "model": info["name"],
+                "input_cost": calculate_cost(token_count, key, "input"),
+            }
+            if args.per_turn:
+                entry["per_turn_tokens"] = token_count
+                entry["total_tokens"] = token_count * args.per_turn
+                entry["total_cost"] = calculate_cost(
+                    token_count * args.per_turn, key, "input", prompt_tokens=token_count
+                )
+                entry["turns"] = args.per_turn
+            result["costs"][key] = entry
+        print(json.dumps(result, indent=2))
+        return
+
+    # Terminal output
+    print_header(args.source, token_count, line_count, char_count)
+    print_cost_table(token_count, model_filter=args.model)
+
+    if args.per_turn:
+        print_per_turn_table(token_count, args.per_turn, model_filter=args.model)
+
+
+if __name__ == "__main__":
+    main()

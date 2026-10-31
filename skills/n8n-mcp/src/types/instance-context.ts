@@ -1,0 +1,332 @@
+/**
+ * Instance Context for flexible configuration support
+ *
+ * Allows the n8n-mcp engine to accept instance-specific configuration
+ * at runtime, enabling flexible deployment scenarios while maintaining
+ * backward compatibility with environment-based configuration.
+ */
+
+import { createHash } from 'crypto';
+import { SSRFProtection } from '../utils/ssrf-protection';
+import { isValidMcpAccessToken } from '../config/n8n-api';
+
+export interface InstanceContext {
+  /**
+   * Instance-specific n8n API configuration
+   * When provided, these override environment variables
+   */
+  n8nApiUrl?: string;
+  n8nApiKey?: string;
+  n8nApiTimeout?: number;
+  n8nApiMaxRetries?: number;
+
+  /**
+   * MCP API key for n8n's instance-level MCP server (Settings → Instance-level MCP).
+   * Optional; enables the official-MCP-backed tools. Separate from n8nApiKey.
+   * The endpoint is derived from n8nApiUrl — there is no URL field for it.
+   */
+  n8nMcpAccessToken?: string;
+
+  /**
+   * Instance identification
+   * Used for session management and logging
+   */
+  instanceId?: string;
+  sessionId?: string;
+
+  /**
+   * MCP Apps (UI cards) switch. Unset or `true` keeps the default behaviour; `false`
+   * stops the server from advertising UI: no `_meta.ui` on tool definitions, no
+   * `_meta['n8n-mcp/toolName']` on tool results, no `ui://` entries in resources/list.
+   * `resources/read` of a `ui://` URI keeps working, because hosts cache tool lists.
+   * The `N8N_MCP_DISABLE_UI_APPS=true` environment variable overrides `true`.
+   */
+  uiAppsEnabled?: boolean;
+
+  /**
+   * Per-call instance targeting. `true` advertises an optional `instance` argument on
+   * every management tool, for embedders that route one credential to several n8n
+   * instances and read the argument themselves. The server never acts on it and drops
+   * it before dispatch. Unset or `false` leaves the tool schemas unchanged.
+   */
+  instanceArgument?: boolean;
+
+  /**
+   * Extensible metadata for future use
+   * Allows passing additional configuration without interface changes
+   */
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Every InstanceContext field, as a value-level list. `satisfies` keeps each entry a real
+ * key, and the exhaustiveness assertion below turns a field added to InstanceContext but
+ * not listed here into a compile error — the silent-field-drop class of #1045 cannot recur.
+ */
+const INSTANCE_CONTEXT_KEYS = [
+  'n8nApiUrl',
+  'n8nApiKey',
+  'n8nApiTimeout',
+  'n8nApiMaxRetries',
+  'n8nMcpAccessToken',
+  'instanceId',
+  'sessionId',
+  'uiAppsEnabled',
+  'instanceArgument',
+  'metadata'
+] as const satisfies readonly (keyof InstanceContext)[];
+
+type MissingInstanceContextKeys = Exclude<keyof InstanceContext, (typeof INSTANCE_CONTEXT_KEYS)[number]>;
+const _instanceContextKeysExhaustive: MissingInstanceContextKeys extends never ? true : never = true;
+void _instanceContextKeysExhaustive;
+
+/**
+ * Copy exactly the declared InstanceContext fields from a context-shaped object.
+ *
+ * Structural typing lets embedders hand over a larger record (a tenant row, a config
+ * object), and restore reads persisted JSON — a plain spread would carry every extra
+ * enumerable property across the session-persistence boundary. Undefined fields are
+ * omitted rather than written as explicit `undefined`.
+ */
+export function pickInstanceContextFields(source: InstanceContext): InstanceContext {
+  const picked: Record<string, unknown> = {};
+  for (const key of INSTANCE_CONTEXT_KEYS) {
+    if (source[key] !== undefined) {
+      picked[key] = source[key];
+    }
+  }
+  return picked as InstanceContext;
+}
+
+/**
+ * Validate URL format with enhanced checks
+ */
+function isValidUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    // Allow only http and https protocols
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+
+    // Check for reasonable hostname (not empty or invalid)
+    if (!parsed.hostname || parsed.hostname.length === 0) {
+      return false;
+    }
+
+    // Validate port if present
+    if (parsed.port && (isNaN(Number(parsed.port)) || Number(parsed.port) < 1 || Number(parsed.port) > 65535)) {
+      return false;
+    }
+
+    // Allow localhost, IP addresses, and domain names
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Allow localhost for development
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      return true;
+    }
+
+    // Basic IPv4 address validation
+    const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (ipv4Pattern.test(hostname)) {
+      const parts = hostname.split('.');
+      return parts.every(part => {
+        const num = parseInt(part, 10);
+        return num >= 0 && num <= 255;
+      });
+    }
+
+    // Basic IPv6 pattern check (simplified)
+    if (hostname.includes(':') || hostname.startsWith('[') && hostname.endsWith(']')) {
+      // Basic IPv6 validation - just checking it's not obviously wrong
+      return true;
+    }
+
+    // Domain name validation - allow subdomains and TLDs
+    const domainPattern = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
+    return domainPattern.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate API key format (basic check for non-empty string)
+ */
+function isValidApiKey(key: string): boolean {
+  // API key should be non-empty and not contain obvious placeholder values
+  return key.length > 0 &&
+         !key.toLowerCase().includes('your_api_key') &&
+         !key.toLowerCase().includes('placeholder') &&
+         !key.toLowerCase().includes('example');
+}
+
+/**
+ * Validate an MCP access token: non-empty, no whitespace, bounded size (the
+ * shared shape check in `isValidMcpAccessToken`), and not an obvious
+ * placeholder. The token is a secret — callers must never log or echo the
+ * value itself, only the validation result.
+ */
+function isValidMcpAccessTokenField(token: unknown): boolean {
+  if (!isValidMcpAccessToken(token)) return false;
+  const lowered = token.toLowerCase();
+  return !['placeholder', 'your_token_here', 'your-token-here', 'example', 'test-token'].includes(lowered);
+}
+
+/**
+ * Type guard to check if an object is an InstanceContext
+ */
+export function isInstanceContext(obj: any): obj is InstanceContext {
+  if (!obj || typeof obj !== 'object') return false;
+
+  // Check for known properties with validation
+  const hasValidUrl = obj.n8nApiUrl === undefined ||
+    (typeof obj.n8nApiUrl === 'string' && isValidUrl(obj.n8nApiUrl));
+
+  const hasValidKey = obj.n8nApiKey === undefined ||
+    (typeof obj.n8nApiKey === 'string' && isValidApiKey(obj.n8nApiKey));
+
+  const hasValidTimeout = obj.n8nApiTimeout === undefined ||
+    (typeof obj.n8nApiTimeout === 'number' && obj.n8nApiTimeout > 0);
+
+  const hasValidRetries = obj.n8nApiMaxRetries === undefined ||
+    (typeof obj.n8nApiMaxRetries === 'number' && obj.n8nApiMaxRetries >= 0);
+
+  const hasValidMcpAccessToken = obj.n8nMcpAccessToken === undefined ||
+    isValidMcpAccessTokenField(obj.n8nMcpAccessToken);
+
+  const hasValidInstanceId = obj.instanceId === undefined || typeof obj.instanceId === 'string';
+  const hasValidSessionId = obj.sessionId === undefined || typeof obj.sessionId === 'string';
+  const hasValidMetadata = obj.metadata === undefined ||
+    (typeof obj.metadata === 'object' && obj.metadata !== null);
+  const hasValidUiAppsEnabled = obj.uiAppsEnabled === undefined || typeof obj.uiAppsEnabled === 'boolean';
+  const hasValidInstanceArgument = obj.instanceArgument === undefined || typeof obj.instanceArgument === 'boolean';
+
+  return hasValidUrl && hasValidKey && hasValidTimeout && hasValidRetries &&
+         hasValidMcpAccessToken &&
+         hasValidInstanceId && hasValidSessionId && hasValidMetadata &&
+         hasValidUiAppsEnabled && hasValidInstanceArgument;
+}
+
+/**
+ * Validate and sanitize InstanceContext
+ * Provides field-specific error messages for better debugging
+ */
+export function validateInstanceContext(context: InstanceContext): {
+  valid: boolean;
+  errors?: string[]
+} {
+  const errors: string[] = [];
+
+  // Validate URL if provided (even empty string should be validated)
+  if (context.n8nApiUrl !== undefined) {
+    if (context.n8nApiUrl === '') {
+      errors.push(`Invalid n8nApiUrl: empty string - URL is required when field is provided`);
+    } else if (!isValidUrl(context.n8nApiUrl)) {
+      // Provide specific reason for URL invalidity
+      try {
+        const parsed = new URL(context.n8nApiUrl);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          errors.push(`Invalid n8nApiUrl: URL must use HTTP or HTTPS protocol, got ${parsed.protocol}`);
+        }
+      } catch {
+        errors.push(`Invalid n8nApiUrl: URL format is malformed or incomplete`);
+      }
+    } else {
+      // SECURITY (GHSA-4ggg-h7ph-26qr): sync URL validation.
+      const ssrf = SSRFProtection.validateUrlSync(context.n8nApiUrl);
+      if (!ssrf.valid) {
+        errors.push(`Invalid n8nApiUrl: ${ssrf.reason}`);
+      }
+    }
+  }
+
+  // Validate API key if provided
+  if (context.n8nApiKey !== undefined) {
+    if (context.n8nApiKey === '') {
+      errors.push(`Invalid n8nApiKey: empty string - API key is required when field is provided`);
+    } else if (!isValidApiKey(context.n8nApiKey)) {
+      // Provide specific reason for API key invalidity
+      if (context.n8nApiKey.toLowerCase().includes('your_api_key')) {
+        errors.push(`Invalid n8nApiKey: contains placeholder 'your_api_key' - Please provide actual API key`);
+      } else if (context.n8nApiKey.toLowerCase().includes('placeholder')) {
+        errors.push(`Invalid n8nApiKey: contains placeholder text - Please provide actual API key`);
+      } else if (context.n8nApiKey.toLowerCase().includes('example')) {
+        errors.push(`Invalid n8nApiKey: contains example text - Please provide actual API key`);
+      } else {
+        errors.push(`Invalid n8nApiKey: format validation failed - Ensure key is valid`);
+      }
+    }
+  }
+
+  // Validate MCP access token if provided
+  if (context.n8nMcpAccessToken !== undefined && !isValidMcpAccessTokenField(context.n8nMcpAccessToken)) {
+    // Never include the value: it is a secret.
+    errors.push('Invalid n8nMcpAccessToken: must be a non-empty string without whitespace (max 4 KB) and not a placeholder value');
+  }
+
+  // Validate timeout
+  if (context.n8nApiTimeout !== undefined) {
+    if (typeof context.n8nApiTimeout !== 'number') {
+      errors.push(`Invalid n8nApiTimeout: ${context.n8nApiTimeout} - Must be a number, got ${typeof context.n8nApiTimeout}`);
+    } else if (context.n8nApiTimeout <= 0) {
+      errors.push(`Invalid n8nApiTimeout: ${context.n8nApiTimeout} - Must be positive (greater than 0)`);
+    } else if (!isFinite(context.n8nApiTimeout)) {
+      errors.push(`Invalid n8nApiTimeout: ${context.n8nApiTimeout} - Must be a finite number (not Infinity or NaN)`);
+    }
+  }
+
+  // Validate retries
+  if (context.n8nApiMaxRetries !== undefined) {
+    if (typeof context.n8nApiMaxRetries !== 'number') {
+      errors.push(`Invalid n8nApiMaxRetries: ${context.n8nApiMaxRetries} - Must be a number, got ${typeof context.n8nApiMaxRetries}`);
+    } else if (context.n8nApiMaxRetries < 0) {
+      errors.push(`Invalid n8nApiMaxRetries: ${context.n8nApiMaxRetries} - Must be non-negative (0 or greater)`);
+    } else if (!isFinite(context.n8nApiMaxRetries)) {
+      errors.push(`Invalid n8nApiMaxRetries: ${context.n8nApiMaxRetries} - Must be a finite number (not Infinity or NaN)`);
+    }
+  }
+
+  // Validate the UI apps switch. No coercion: a string "false" read as true (or the
+  // reverse) would silently invert the caller's choice.
+  if (context.uiAppsEnabled !== undefined && typeof context.uiAppsEnabled !== 'boolean') {
+    errors.push(`Invalid uiAppsEnabled: Must be a boolean, got ${typeof context.uiAppsEnabled}`);
+  }
+
+  if (context.instanceArgument !== undefined && typeof context.instanceArgument !== 'boolean') {
+    errors.push(`Invalid instanceArgument: Must be a boolean, got ${typeof context.instanceArgument}`);
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: errors.length > 0 ? errors : undefined
+  };
+}
+
+/**
+ * Derive a stable, non-spoofable tenant scope id for the local
+ * workflow_versions table from an instance context.
+ *
+ * The key is a deterministic SHA-256 of the normalized n8n API URL and the
+ * API key. The API key is a secret the caller already presents to reach its
+ * own n8n instance, so a tenant cannot forge another tenant's scope id.
+ *
+ * Returns '' when no credentials are present (single-user / stdio mode), so
+ * those deployments share a single logical tenant.
+ *
+ * Must be deterministic across processes and restarts: this id is persisted
+ * in the database and compared on later reads/deletes. Do NOT use
+ * createCacheKey() from cache-utils, which uses a per-process random salt.
+ */
+export function getInstanceScopeId(context?: InstanceContext): string {
+  if (context?.n8nApiUrl && context?.n8nApiKey) {
+    const url = context.n8nApiUrl.trim().replace(/\/+$/, '').toLowerCase();
+    return createHash('sha256')
+      .update(`n8n-mcp-wv:${url}:${context.n8nApiKey}`)
+      .digest('hex')
+      .slice(0, 32);
+  }
+  return '';
+}

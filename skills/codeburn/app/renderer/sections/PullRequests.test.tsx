@@ -1,0 +1,522 @@
+// @vitest-environment jsdom
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { formatDayShort } from '../lib/format'
+import { prFilters } from '../lib/investigation'
+import type { MenubarPayload } from '../lib/types'
+import { PullRequests } from './PullRequests'
+
+type PrPayload = NonNullable<MenubarPayload['current']['pullRequests']>
+
+const { getOverview, openExternal } = vi.hoisted(() => ({
+  getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
+  openExternal: vi.fn<(url: string) => Promise<void>>(),
+}))
+vi.mock('../lib/ipc', async orig => {
+  const actual = await orig<typeof import('../lib/ipc')>()
+  return { ...actual, codeburn: { getOverview, openExternal } }
+})
+
+// Mirror the component's span rule so the assertion stays timezone-safe.
+function expectedSpan(first: string, last: string): string {
+  const start = formatDayShort(first)
+  const end = formatDayShort(last)
+  return start === end ? start : `${start} - ${end}`
+}
+
+function makePayload(pullRequests?: PrPayload): MenubarPayload {
+  return {
+    generated: '2026-07-20T00:00:00Z',
+    current: {
+      label: 'Lifetime', cost: 0, calls: 0, sessions: 0, oneShotRate: null,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitPercent: 0,
+      codexCredits: 0, topActivities: [], topModels: [],
+      localModelSavings: { totalUSD: 0, calls: 0, byModel: [], byProvider: [] },
+      providers: {}, topProjects: [], modelEfficiency: [], topSessions: [],
+      retryTax: { totalUSD: 0, retries: 0, editTurns: 0, byModel: [] },
+      routingWaste: { totalSavingsUSD: 0, baselineModel: '', baselineCostPerEdit: 0, byModel: [] },
+      tools: [], skills: [], subagents: [], mcpServers: [],
+      ...(pullRequests ? { pullRequests } : {}),
+    },
+    optimize: { findingCount: 0, savingsUSD: 0, topFindings: [] },
+    history: { daily: [] },
+  }
+}
+
+const SAMPLE: PrPayload = {
+  rows: [
+    { url: 'https://github.com/getagentseal/codeburn/pull/780', label: 'getagentseal/codeburn#780', cost: 240.5, savingsUSD: 0, sessions: 3, calls: 512, firstStarted: '2026-07-01T10:00:00Z', lastEnded: '2026-07-03T18:00:00Z', models: ['fable', 'opus', 'haiku'], categories: [{ name: 'Feature work', cost: 180.25 }, { name: 'Debugging', cost: 60.25 }] },
+    { url: 'https://github.com/getagentseal/codeburn/pull/781', label: 'getagentseal/codeburn#781', cost: 90.25, savingsUSD: 0, sessions: 1, calls: 120, firstStarted: '2026-07-05T13:00:00Z', lastEnded: '2026-07-05T15:00:00Z', models: ['sonnet'], categories: [{ name: 'Refactoring', cost: 90.25 }] },
+  ],
+  distinctCost: 376.05,
+  distinctSessions: 3,
+  attributedCost: 330.75,
+  unattributedCost: 45.3,
+}
+
+// Get the button-role row wrapping a given PR link, for click/keyboard toggling.
+function rowForLink(link: HTMLElement): HTMLElement {
+  const row = link.closest('[role="button"]')
+  if (!row) throw new Error('expected a button-role row around the PR link')
+  return row as HTMLElement
+}
+
+describe('PullRequests', () => {
+  beforeEach(() => {
+    getOverview.mockReset()
+    openExternal.mockReset()
+    openExternal.mockResolvedValue(undefined)
+  })
+
+  it('renders PR cards with linked labels, cost, activity, and a date span', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    expect(link).toHaveAttribute('href', 'https://github.com/getagentseal/codeburn/pull/780')
+    expect(screen.getByText('$240.50')).toBeInTheDocument()
+    expect(screen.getByText('512 calls')).toBeInTheDocument()
+    expect(screen.getByText(expectedSpan(SAMPLE.rows[0]!.firstStarted, SAMPLE.rows[0]!.lastEnded))).toBeInTheDocument()
+    // A same-day PR collapses its span to a single label.
+    expect(screen.getByText(expectedSpan(SAMPLE.rows[1]!.firstStarted, SAMPLE.rows[1]!.lastEnded))).toBeInTheDocument()
+  })
+
+  it('renders every model explicitly instead of hiding models behind an overflow count', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText('fable')).toBeInTheDocument()
+    expect(screen.getByText('opus')).toBeInTheDocument()
+    expect(screen.getByText('haiku')).toBeInTheDocument()
+    expect(screen.queryByText('+1')).toBeNull()
+    expect(screen.getByText('sonnet')).toBeInTheDocument()
+  })
+
+  it('opens the PR URL externally without navigating or toggling the row', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(link)
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/getagentseal/codeburn/pull/780')
+    // Clicking the link must not expand its row.
+    expect(rowForLink(link)).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Feature work')).toBeNull()
+  })
+
+  it('expands a row to its category breakdown on click, then collapses', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    const row = rowForLink(link)
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+    expect(screen.getByText('$180.25')).toBeInTheDocument()
+    expect(screen.getByText('Debugging')).toBeInTheDocument()
+
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Feature work')).toBeNull()
+  })
+
+  it('closes an open expansion when the period changes the PR set', async () => {
+    const changed: PrPayload = { ...SAMPLE, rows: [SAMPLE.rows[0]!] } // #781 dropped
+    getOverview.mockImplementation((period: string) => Promise.resolve(makePayload(period === 'lifetime' ? SAMPLE : changed)))
+    const { rerender } = render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(rowForLink(link))
+    expect(rowForLink(link)).toHaveAttribute('aria-expanded', 'true')
+
+    rerender(<PullRequests period="week" provider="all" />)
+    // The new period drops #781, so the PR set changes and the stale expansion
+    // resets once the new data lands (wait for the breakdown to disappear).
+    await waitFor(() => expect(screen.queryByText('Feature work')).toBeNull())
+    const link2 = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    expect(rowForLink(link2)).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('closes an open expansion on a period switch even when the PR set is identical', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    const { rerender } = render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(rowForLink(link))
+    expect(rowForLink(link)).toHaveAttribute('aria-expanded', 'true')
+
+    // Same rows come back for the new period; the expansion must still reset,
+    // since the row's underlying numbers may differ across periods.
+    rerender(<PullRequests period="week" provider="all" />)
+    await waitFor(() => expect(screen.queryByText('Feature work')).toBeNull())
+    const link2 = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    expect(rowForLink(link2)).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('toggles expansion from the keyboard with Enter', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    const row = rowForLink(link)
+    row.focus()
+
+    await userEvent.keyboard('{Enter}')
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+
+    await userEvent.keyboard('{Enter}')
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('drills a PR through to the sessions that composed it, leaving the row expanded', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    const onInvestigate = vi.fn()
+    render(<PullRequests period="lifetime" provider="all" onInvestigate={onInvestigate} />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    const row = rowForLink(link)
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+
+    await userEvent.click(screen.getByRole('button', { name: /View sessions for this pull request/ }))
+    expect(onInvestigate).toHaveBeenCalledTimes(1)
+    expect(onInvestigate).toHaveBeenCalledWith({ filters: prFilters('https://github.com/getagentseal/codeburn/pull/780') })
+    // The affordance drills; the row it sits in keeps the state it was in.
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+  })
+
+  it('drills from the keyboard and still leaves a legacy row expanded', async () => {
+    const approxPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/900', label: 'getagentseal/codeburn#900', cost: 12.5, savingsUSD: 0, sessions: 1, calls: 30, firstStarted: '2026-07-10T10:00:00Z', lastEnded: '2026-07-10T11:00:00Z', approx: true },
+      ],
+      distinctCost: 12.5,
+      distinctSessions: 1,
+      attributedCost: 12.5,
+      unattributedCost: 0,
+    }
+    getOverview.mockResolvedValue(makePayload(approxPayload))
+    const onInvestigate = vi.fn()
+    render(<PullRequests period="lifetime" provider="all" onInvestigate={onInvestigate} />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#900' })
+    const row = rowForLink(link)
+    await userEvent.click(row)
+
+    // A row with no per-turn detail still offers the drill-through.
+    const drill = screen.getByRole('button', { name: /View sessions for this pull request/ })
+    drill.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(onInvestigate).toHaveBeenCalledWith({ filters: prFilters('https://github.com/getagentseal/codeburn/pull/900') })
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('offers no drill-through affordance when the section has no destination to drill to', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(rowForLink(link))
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /View sessions/ })).toBeNull()
+  })
+
+  it('states the attributed-total footer and the summable framing', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText('Attributed spend')).toBeInTheDocument()
+    expect(screen.getByText('$330.75')).toBeInTheDocument()
+    expect(screen.getByLabelText('Pull request attribution summary')).toHaveTextContent('Linked sessions3')
+    const note = screen.getByText(/attributed turn by turn/)
+    expect(note.textContent).toContain('without double counting')
+    expect(screen.getByText(/Not tied to a specific PR/).textContent).toContain('$45.30')
+  })
+
+  it('notes folded-in subagent runs in the footer when present', async () => {
+    getOverview.mockResolvedValue(makePayload({ ...SAMPLE, subagentSessions: 32 }))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText('Folded agent runs')).toBeInTheDocument()
+    expect(screen.getByText('32')).toBeInTheDocument()
+    const note = screen.getByText(/attributed turn by turn/)
+    expect(note.textContent).toContain('32 subagent runs are included')
+  })
+
+  it('omits the subagent note when none were folded', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const note = await screen.findByText(/attributed turn by turn/)
+    expect(note.textContent).not.toContain('subagent')
+  })
+
+  it('marks an approximate (legacy) row with a ~ prefix and a tooltip', async () => {
+    const approxPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/900', label: 'getagentseal/codeburn#900', cost: 12.5, savingsUSD: 0, sessions: 1, calls: 30, firstStarted: '2026-07-10T10:00:00Z', lastEnded: '2026-07-10T11:00:00Z', approx: true },
+      ],
+      distinctCost: 12.5,
+      distinctSessions: 1,
+      attributedCost: 12.5,
+      unattributedCost: 0,
+    }
+    getOverview.mockResolvedValue(makePayload(approxPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const cost = await screen.findByText('~$12.50')
+    expect(cost).toHaveAttribute('title')
+    // A zero unattributed remainder hides the muted line.
+    expect(screen.queryByText(/Not tied to a specific PR/)).toBeNull()
+  })
+
+  it('expands a category-less (legacy) row to a muted note, not an empty box', async () => {
+    const approxPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/900', label: 'getagentseal/codeburn#900', cost: 12.5, savingsUSD: 0, sessions: 1, calls: 30, firstStarted: '2026-07-10T10:00:00Z', lastEnded: '2026-07-10T11:00:00Z', approx: true },
+      ],
+      distinctCost: 12.5,
+      distinctSessions: 1,
+      attributedCost: 12.5,
+      unattributedCost: 0,
+    }
+    getOverview.mockResolvedValue(makePayload(approxPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#900' })
+    await userEvent.click(rowForLink(link))
+    expect(screen.getByText(/No per-turn detail/)).toBeInTheDocument()
+  })
+
+  it('renders the old-CLI by-reference footer without NaN and never claims summable', async () => {
+    const oldPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/500', label: 'getagentseal/codeburn#500', cost: 120.4, savingsUSD: 0, sessions: 2, calls: 300, firstStarted: '2026-06-01T10:00:00Z', lastEnded: '2026-06-02T12:00:00Z' },
+      ],
+      distinctCost: 120.4,
+      distinctSessions: 2,
+    }
+    getOverview.mockResolvedValue(makePayload(oldPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const note = await screen.findByText(/produced pull requests/)
+    expect(note.textContent).toContain('$120.40')
+    expect(note.textContent).toContain('by reference')
+    expect(note.textContent).toContain('not summed')
+    expect(note.textContent).not.toContain('summable')
+    // No optional field renders as NaN and no unattributed line appears.
+    expect(screen.queryByText(/NaN/)).toBeNull()
+    expect(screen.queryByText(/Not tied to a specific PR/)).toBeNull()
+  })
+
+  it('renders the complete PR list without an opaque Other row', async () => {
+    const manyRows = Array.from({ length: 32 }, (_, index) => ({
+      ...SAMPLE.rows[0]!,
+      url: `https://github.com/getagentseal/codeburn/pull/${800 + index}`,
+      label: `getagentseal/codeburn#${800 + index}`,
+    }))
+    getOverview.mockResolvedValue(makePayload({
+      ...SAMPLE,
+      rows: manyRows,
+      attributedCost: manyRows.reduce((sum, row) => sum + row.cost, 0),
+    }))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText('getagentseal/codeburn#800')).toBeInTheDocument()
+    expect(screen.getByText('getagentseal/codeburn#831')).toBeInTheDocument()
+    expect(screen.getByText('32 total')).toBeInTheDocument()
+    expect(screen.queryByText(/Other \(/)).toBeNull()
+  })
+
+  it('shows a period-aware empty state (never a fake table) when no PR links exist', async () => {
+    getOverview.mockResolvedValue(makePayload())
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText(/No sessions in Lifetime mentioned a pull request URL/)).toBeInTheDocument()
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('shows the empty state when the PR array is present but empty', async () => {
+    getOverview.mockResolvedValue(makePayload({ rows: [], distinctCost: 0, distinctSessions: 0, attributedCost: 0, unattributedCost: 0 }))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText(/No sessions in Lifetime mentioned a pull request URL/)).toBeInTheDocument()
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('names Today and points at Lifetime when a wider window has rows', async () => {
+    getOverview.mockImplementation(async (period: string) => {
+      if (period === 'lifetime') return makePayload(SAMPLE)
+      return makePayload()
+    })
+    render(<PullRequests period="today" provider="all" />)
+
+    expect(await screen.findByText(/No sessions in Today mentioned a pull request URL/)).toBeInTheDocument()
+    expect(await screen.findByText(/Lifetime has 2 pull requests/)).toBeInTheDocument()
+    expect(getOverview).toHaveBeenCalledWith('lifetime', 'all')
+  })
+
+  it('names the custom range, not the dormant standard period', async () => {
+    getOverview.mockResolvedValue(makePayload())
+    render(<PullRequests period="30days" provider="all" range={{ from: '2026-08-20', to: '2026-08-22' }} />)
+
+    expect(await screen.findByText(/No sessions in Aug 20 – 22 mentioned a pull request URL/)).toBeInTheDocument()
+    expect(screen.queryByText(/Last 30 days/)).toBeNull()
+  })
+
+  describe('local PR facts', () => {
+    const base = { savingsUSD: 0, sessions: 1, calls: 10, firstStarted: '2026-10-08T10:00:00Z', lastEnded: '2026-10-08T12:00:00Z', models: ['Opus 5.5'], categories: [{ name: 'Coding', cost: 1 }], linkEvidence: 'explicit' as const, openedAt: null, followUpPushes: 0, reviewCostUSD: 0, mergedAt: null, timeToMergeMs: null, carriedUSD: 0, runList: [], state: null, followUpAt: [] }
+    const pr = (n: number) => ({ url: `https://github.com/o/r/pull/${n}`, label: `o/r#${n}` })
+    const ROWS: PrPayload['rows'] = [
+      { ...base, ...pr(1), cost: 11.16, runs: 3, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 0, oneShot: true, reviewRuns: [], mergedAt: '2026-10-08T10:11:00Z', timeToMergeMs: 660_000, state: 'merged', costSplit: { buildUSD: 11.16, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(2), cost: 14.11, runs: 4, followUpRounds: 1, followUpPushes: 1, oneShot: null, reviewRuns: [{ kind: 'agent', label: 'general-purpose', model: 'Opus 5.5', costUSD: 1.4, at: '2026-10-10T08:56:00Z', evidence: 'reads-pr' }], reviewCostUSD: 1.4, mergedAt: '2026-10-10T09:34:00Z', followUpAt: ['2026-10-10T09:15:00Z'], costSplit: { buildUSD: 0, reviewUSD: 1.4, fixesUSD: 12.71 } },
+      { ...base, ...pr(3), cost: 4.45, runs: 1, linkEvidence: 'pr-link-only', followUpRounds: null, oneShot: null, reviewRuns: [], carriedUSD: 4.45, costSplit: { buildUSD: 4.45, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(4), cost: 9, runs: 6, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 2, followUpPushes: 5, oneShot: false, reviewRuns: [
+        { kind: 'agent', label: 'general-purpose', model: 'Sonnet 5.5', costUSD: 0.5, at: '2026-10-08T10:30:00Z', evidence: 'reads-pr' },
+        { kind: 'you', label: 'approve', model: 'Opus 5.5', costUSD: 0.25, at: '2026-10-08T11:30:00Z', evidence: 'gh-pr-review' },
+      ], reviewCostUSD: 0.75, costSplit: { buildUSD: 6, reviewUSD: 0.75, fixesUSD: 2.25 } },
+      // The #1732 shape: a draft opened here with its head a shell variable, no
+      // review, most spend only carried by the session's pr-link tag.
+      { ...base, ...pr(5), cost: 30.62, runs: 9, openedAt: '2026-10-10T15:18:39Z', followUpRounds: null, oneShot: null, reviewRuns: [], state: 'draft', carriedUSD: 27.97,
+        categories: ['Coding', 'Exploration', 'Debugging', 'Testing', 'Planning', 'Git ops', 'Docs'].map((name, i) => ({ name, cost: [19.6, 3.06, 2.5, 2, 1.5, 1, 0.96][i]! })),
+        runList: [
+          { kind: 'session', description: null, model: 'Opus 5.5', costUSD: 0.62, at: '2026-10-10T15:17:17Z', link: 'opened' },
+          { kind: 'session', description: null, model: 'Opus 5.5', costUSD: 1.6, at: '2026-10-10T15:32:00Z', link: 'gh-pr' },
+          { kind: 'subagent', description: 'Create release/0.9.26 version branch', model: 'Sonnet 5.5', costUSD: 0.43, at: '2026-10-10T14:24:00Z', link: 'pushed-head' },
+          { kind: 'subagent', description: 'Research PR view: one-shot, reviews', model: 'Opus 5.5', costUSD: 27.97, at: '2026-10-10T16:30:48Z', link: 'carried' },
+        ],
+        costSplit: { buildUSD: 30.62, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(6), cost: 10, runs: 2, followUpRounds: null, oneShot: null, reviewRuns: [], state: 'closed', carriedUSD: 0.4, costSplit: { buildUSD: 10, reviewUSD: 0, fixesUSD: 0 } },
+    ]
+    const payload = { rows: ROWS, distinctCost: 79.34, distinctSessions: 1, attributedCost: 79.34, unattributedCost: 0 }
+
+    async function card(n: number): Promise<HTMLElement> {
+      return (await screen.findByRole('link', { name: `o/r#${n}` })).closest('article') as HTMLElement
+    }
+    async function opened(n: number): Promise<HTMLElement> {
+      const el = await card(n)
+      await userEvent.click(rowForLink(within(el).getByRole('link')))
+      return el
+    }
+    const facts = (el: HTMLElement) => [...el.querySelectorAll('.pr-card-facts span')].map(s => s.textContent)
+    const tableRows = (region: HTMLElement) => [...region.querySelectorAll('tr')].map(r => [...r.querySelectorAll('td')].map(td => td.textContent))
+    const render6 = () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+    }
+
+    it('merged on its day, one shot, no review run found, and the run count', async () => {
+      render6()
+      const el = await card(1)
+      expect(facts(el)).toEqual([`Merged ${formatDayShort('2026-10-08T10:11:00Z')}`, 'One shot', 'No review run found'])
+      expect(el).toHaveTextContent('3 runs')
+      expect(el).not.toHaveTextContent('1 session')
+    })
+
+    it('a PR opened elsewhere: merged, your follow-ups, the review run', async () => {
+      render6()
+      const el = await card(2)
+      expect(facts(el)).toEqual([`Merged ${formatDayShort('2026-10-10T09:34:00Z')}`, 'Your follow-ups: 1', 'Reviewed by Opus 5.5 run ($1.40)'])
+      expect(el).not.toHaveTextContent('One shot')
+    })
+
+    it('the #24 shape: states every unknown, the carried spend and pr-link only', async () => {
+      render6()
+      const el = await card(3)
+      expect(facts(el)).toEqual(['Follow-ups: not tracked', 'No review run found', '$4.45 from other work in the same session', 'Linked by pr-link only'])
+      expect(el).toHaveTextContent('1 run')
+      expect(el.textContent).not.toMatch(/stale|one shot/i)
+    })
+
+    it('several review runs and counted rounds', async () => {
+      render6()
+      expect(facts(await card(4))).toEqual(['2 follow-up rounds', '2 review runs ($0.75)'])
+    })
+
+    it('the #1732 shape: draft, follow-ups not tracked, no review, carried', async () => {
+      render6()
+      const el = await card(5)
+      expect(facts(el)).toEqual(['Open · draft', 'Follow-ups: not tracked', 'No review run found', '$27.97 from other work in the same session'])
+    })
+
+    it('closed, and no carried note under the threshold', async () => {
+      render6()
+      expect(facts(await card(6))).toEqual(['Closed', 'Follow-ups: not tracked', 'No review run found'])
+    })
+
+    it('an older payload without the fields keeps the session count and no facts line', async () => {
+      getOverview.mockResolvedValue(makePayload(SAMPLE))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = (await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })).closest('article') as HTMLElement
+      expect(el).toHaveTextContent('3 sessions')
+      expect(el.querySelector('.pr-card-facts')).toBeNull()
+      await userEvent.click(rowForLink(within(el).getByRole('link')))
+      expect(within(el).queryByRole('region', { name: /timeline|runs|by phase/i })).toBeNull()
+    })
+
+    it('expands to timeline, runs with their reasons, cost by phase, and a top-5 work table', async () => {
+      render6()
+      const el = await opened(5)
+      const regions = [...el.querySelectorAll('[role="region"]')].map(r => r.getAttribute('aria-label'))
+      expect(regions).toEqual(['o/r#5 timeline', 'o/r#5 runs', 'o/r#5 spend by phase', 'o/r#5 cost breakdown'])
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 timeline' })).map(r => r[0])).toEqual(['Opened'])
+      const runs = within(el).getByRole('region', { name: 'o/r#5 runs' })
+      expect(tableRows(runs)).toEqual([
+        ['Main session', 'opened it', 'Opus 5.5', '$0.62'],
+        ['Main session', 'ran gh on this PR', 'Opus 5.5', '$1.60'],
+        ['Create release/0.9.26 version branch', "pushed this PR's branch", 'Sonnet 5.5', '$0.43'],
+        ['Research PR view: one-shot, reviews', 'other work in this session', 'Opus 5.5', '$27.97'],
+      ])
+      expect(runs).toHaveTextContent('$27.97 from other work in the same session')
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 spend by phase' }))).toEqual([
+        ['Building', '$30.62', '100%'], ['Review runs', '$0.00', '0%'], ['After first review', '$0.00', '0%'],
+      ])
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 cost breakdown' }))).toEqual([
+        ['Coding', '$19.60', '64%'], ['Exploration', '$3.06', '10%'], ['Debugging', '$2.50', '8%'], ['Testing', '$2.00', '7%'], ['Planning', '$1.50', '5%'], ['Other', '$1.96', '6%'],
+      ])
+      expect(el.querySelector('.pr-cat-bar')).toBeNull()
+    })
+
+    it('shows the full run description in a tooltip only while it is cut off', async () => {
+      render6()
+      const el = await opened(5)
+      const cell = within(el).getByRole('region', { name: 'o/r#5 runs' }).querySelectorAll('td')[8]!
+      expect(cell).toHaveTextContent('Create release/0.9.26 version branch')
+      await userEvent.hover(cell)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await userEvent.unhover(cell)
+      const spy = vi.spyOn(cell, 'scrollWidth', 'get').mockReturnValue(400)
+      vi.spyOn(cell, 'clientWidth', 'get').mockReturnValue(100)
+      await userEvent.hover(cell)
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Create release/0.9.26 version branch')
+      await userEvent.unhover(cell)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      spy.mockRestore()
+    })
+
+    it('puts follow-up rounds, the first review and the merge on the timeline, and splits by phase', async () => {
+      render6()
+      const el = await opened(2)
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#2 timeline' })).map(r => r[0])).toEqual(['First review', 'Follow-up round 1', 'Merged'])
+      const el4 = await opened(4)
+      const split = ROWS[3]!.costSplit!
+      expect(tableRows(within(el4).getByRole('region', { name: 'o/r#4 spend by phase' }))).toEqual([
+        ['Building', '$6.00', '67%'], ['Review runs', '$0.75', '8%'], ['After first review', '$2.25', '25%'],
+      ])
+      expect(split.buildUSD + split.reviewUSD + split.fixesUSD).toBeCloseTo(ROWS[3]!.cost, 10)
+    })
+
+    it('says when no open, review or merge was seen', async () => {
+      render6()
+      const el = await opened(3)
+      expect(within(el).getByRole('region', { name: 'o/r#3 timeline' })).toHaveTextContent('No open, review or merge seen here.')
+    })
+  })
+})

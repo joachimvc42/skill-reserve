@@ -1,0 +1,753 @@
+/**
+ * Batch Processor for Telemetry
+ * Handles batching, queuing, and sending telemetry data to the ingest API
+ */
+
+import { IngestClient } from './ingest-client';
+import { TelemetryEvent, WorkflowTelemetry, WorkflowMutationRecord, TELEMETRY_CONFIG, TelemetryMetrics } from './telemetry-types';
+import { TelemetryError, TelemetryErrorType, TelemetryCircuitBreaker } from './telemetry-error';
+import { logger } from '../utils/logger';
+
+/**
+ * Convert camelCase key to snake_case
+ */
+function keyToSnakeCase(key: string): string {
+  return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Convert WorkflowMutationRecord to the ingest API's column-name format.
+ *
+ * IMPORTANT: Only converts top-level field names to snake_case, because only the
+ * top-level columns (user_id, session_id, etc.) are named that way. Nested workflow
+ * data (workflowAfter, operations, etc.) is preserved EXACTLY as-is to maintain n8n
+ * API compatibility — the workflow_mutations table stores it in JSONB columns, which
+ * keep the original structure.
+ *
+ * Issue #517: Previously this used recursive conversion which mangled:
+ * - Connection keys (node names like "Webhook" → "_webhook")
+ * - Node field names (typeVersion → type_version)
+ */
+function mutationToSupabaseFormat(mutation: WorkflowMutationRecord): Record<string, any> {
+  const result: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(mutation)) {
+    result[keyToSnakeCase(key)] = value;
+  }
+
+  return result;
+}
+
+export class TelemetryBatchProcessor {
+  private flushTimer?: NodeJS.Timeout;
+  private flushQueue: Promise<void> = Promise.resolve();
+  private circuitBreaker: TelemetryCircuitBreaker;
+  private metrics: TelemetryMetrics = {
+    eventsTracked: 0,
+    eventsDropped: 0,
+    eventsFailed: 0,
+    batchesSent: 0,
+    batchesFailed: 0,
+    averageFlushTime: 0,
+    rateLimitHits: 0
+  };
+  private flushTimes: number[] = [];
+  private deadLetterQueue: (TelemetryEvent | WorkflowTelemetry)[] = [];
+  private readonly maxDeadLetterSize = 100;
+  // Track event listeners for proper cleanup to prevent memory leaks
+  private eventListeners: {
+    beforeExit?: () => void;
+    sigint?: () => void;
+    sigterm?: () => void;
+  } = {};
+  private started: boolean = false;
+  private readonly operationTimeout: number;
+  private readonly onFlushRequested?: () => void | Promise<void>;
+
+  constructor(
+    private ingestClient: IngestClient | null,
+    private isEnabled: () => boolean,
+    options: {
+      operationTimeout?: number;
+      onFlushRequested?: () => void | Promise<void>;
+    } = {}
+  ) {
+    this.circuitBreaker = new TelemetryCircuitBreaker();
+    this.operationTimeout = options.operationTimeout ?? TELEMETRY_CONFIG.OPERATION_TIMEOUT;
+    this.onFlushRequested = options.onFlushRequested;
+  }
+
+  /**
+   * Start the batch processor
+   */
+  start(): void {
+    if (!this.isEnabled() || !this.ingestClient) return;
+
+    // Guard against multiple starts (prevents event listener accumulation)
+    if (this.started) {
+      logger.debug('Telemetry batch processor already started, skipping');
+      return;
+    }
+
+    // Set up periodic flushing
+    this.flushTimer = setInterval(() => {
+      void this.requestFlush();
+    }, TELEMETRY_CONFIG.BATCH_FLUSH_INTERVAL);
+
+    // Prevent timer from keeping process alive
+    // In tests, flushTimer might be a number instead of a Timer object
+    if (typeof this.flushTimer === 'object' && 'unref' in this.flushTimer) {
+      this.flushTimer.unref();
+    }
+
+    // Set up process exit handlers with stored references for cleanup
+    this.eventListeners.beforeExit = () => {
+      void this.requestFlush();
+    };
+    this.eventListeners.sigint = () => {
+      void this.flushAndExit();
+    };
+    this.eventListeners.sigterm = () => {
+      void this.flushAndExit();
+    };
+
+    process.on('beforeExit', this.eventListeners.beforeExit);
+    process.on('SIGINT', this.eventListeners.sigint);
+    process.on('SIGTERM', this.eventListeners.sigterm);
+
+    this.started = true;
+    logger.debug('Telemetry batch processor started');
+  }
+
+  /**
+   * Stop the batch processor
+   */
+  stop(): void {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+
+    // Remove event listeners to prevent memory leaks
+    if (this.eventListeners.beforeExit) {
+      process.removeListener('beforeExit', this.eventListeners.beforeExit);
+    }
+    if (this.eventListeners.sigint) {
+      process.removeListener('SIGINT', this.eventListeners.sigint);
+    }
+    if (this.eventListeners.sigterm) {
+      process.removeListener('SIGTERM', this.eventListeners.sigterm);
+    }
+    this.eventListeners = {};
+    this.started = false;
+
+    logger.debug('Telemetry batch processor stopped');
+  }
+
+  /**
+   * Ask the queue owner to flush, falling back to an empty processor flush for
+   * standalone callers that do not provide a queue-aware callback.
+   */
+  private requestFlush(): Promise<void> {
+    const requestedFlush = this.onFlushRequested
+      ? this.onFlushRequested()
+      : this.flush();
+
+    return Promise.resolve(requestedFlush).catch(error => {
+      logger.debug('Scheduled telemetry flush failed:', error);
+    });
+  }
+
+  private async flushAndExit(): Promise<void> {
+    await this.requestFlush();
+    process.exit(0);
+  }
+
+  /**
+   * Flush events, workflows, and mutations to the ingest API
+   */
+  flush(events?: TelemetryEvent[], workflows?: WorkflowTelemetry[], mutations?: WorkflowMutationRecord[]): Promise<void> {
+    // Capture each caller's batches before queuing so later caller mutations cannot
+    // change or empty data that is waiting behind an in-progress flush.
+    const queuedEvents = events ? [...events] : undefined;
+    const queuedWorkflows = workflows ? [...workflows] : undefined;
+    const queuedMutations = mutations ? [...mutations] : undefined;
+
+    const queuedFlush = this.flushQueue.then(() =>
+      this.flushQueuedBatch(queuedEvents, queuedWorkflows, queuedMutations)
+    );
+
+    // Keep the queue usable after an unexpected rejection while preserving that
+    // rejection for the caller that owns this particular flush.
+    this.flushQueue = queuedFlush.catch(() => undefined);
+    return queuedFlush;
+  }
+
+  private async flushQueuedBatch(
+    events?: TelemetryEvent[],
+    workflows?: WorkflowTelemetry[],
+    mutations?: WorkflowMutationRecord[]
+  ): Promise<void> {
+    if (!this.isEnabled() || !this.ingestClient) return;
+
+    // Local preparation first: drop items that cannot be serialized,
+    // deduplicate, convert and batch. This is pure local work with no
+    // network call, so it runs before the circuit breaker is consulted —
+    // a flush made only of poison items then has no work left and never
+    // touches the breaker (round 4).
+    const droppedBeforePrepare = this.metrics.eventsDropped;
+    const eventBatches = this.prepareEventBatches(events ?? []);
+    const workflowBatches = this.prepareWorkflowBatches(workflows ?? []);
+    const mutationBatches = this.prepareMutationBatches(mutations ?? []);
+    const droppedLocally = this.metrics.eventsDropped - droppedBeforePrepare;
+
+    // Nothing to do: a scheduled tick with empty queues and an empty dead
+    // letter queue must be a complete no-op. shouldAllow() has side effects
+    // (the open->half-open transition, consuming a half-open probe slot),
+    // so calling it here — with no request to actually make — would waste
+    // the limited half-open budget on nothing, potentially wedging the
+    // breaker half-open forever once a real outage opens it (round 3).
+    const hasWork = eventBatches.length > 0
+      || workflowBatches.length > 0
+      || mutationBatches.length > 0
+      || this.deadLetterQueue.length > 0;
+    if (!hasWork) return;
+
+    // Check circuit breaker
+    if (!this.circuitBreaker.shouldAllow()) {
+      logger.debug('Circuit breaker open - skipping flush');
+      // Everything this call was handed is dropped; the items already
+      // dropped (and counted) during preparation are not counted twice.
+      this.metrics.eventsDropped +=
+        (events?.length || 0) + (workflows?.length || 0) + (mutations?.length || 0) - droppedLocally;
+      return;
+    }
+
+    const startTime = Date.now();
+    let hasErrors = false;
+    let primaryBatchAttempted = false;
+
+    // Flush events if provided
+    if (eventBatches.length > 0) {
+      primaryBatchAttempted = true;
+      hasErrors = !(await this.flushEvents(eventBatches)) || hasErrors;
+    }
+
+    // Flush workflows if provided
+    if (workflowBatches.length > 0) {
+      primaryBatchAttempted = true;
+      hasErrors = !(await this.flushWorkflows(workflowBatches)) || hasErrors;
+    }
+
+    // Flush mutations if provided
+    if (mutationBatches.length > 0) {
+      primaryBatchAttempted = true;
+      hasErrors = !(await this.flushMutations(mutationBatches)) || hasErrors;
+    }
+
+    // Record flush time
+    const flushTime = Date.now() - startTime;
+    this.recordFlushTime(flushTime);
+
+    // Update circuit breaker from this call's own batch — but only if it
+    // actually attempted a request. A scheduled flush with nothing new to
+    // send must not record a success on the breaker's behalf; that used to
+    // mask a persistently failing dead-letter replay below by resetting the
+    // failure count on every empty tick, so the circuit never opened and the
+    // DLQ was retried, unthrottled, forever.
+    if (primaryBatchAttempted) {
+      if (hasErrors) {
+        this.circuitBreaker.recordFailure();
+      } else {
+        this.circuitBreaker.recordSuccess();
+      }
+    }
+
+    // Process dead letter queue if circuit is healthy. Its own outcome feeds
+    // the breaker too — a replay is a real network attempt like any other.
+    if (!hasErrors && this.deadLetterQueue.length > 0) {
+      const replaySucceeded = await this.processDeadLetterQueue();
+      if (replaySucceeded === true) {
+        this.circuitBreaker.recordSuccess();
+      } else if (replaySucceeded === false) {
+        this.circuitBreaker.recordFailure();
+      }
+      // null: every parked item was dropped locally, no request was made.
+    }
+  }
+
+  /**
+   * Drop items that are not objects, run the stream-specific transform
+   * (deduplication / column conversion), and batch what remains. Never
+   * throws: a batching or serialization failure is a local data problem,
+   * not a server one, so it must never park items in the dead letter queue
+   * (a replay would hit the same item forever) or record a circuit-breaker
+   * failure. Every dropped item is counted in metrics.eventsDropped.
+   */
+  private prepareBatches<T, R>(
+    items: T[],
+    streamName: string,
+    transform: (valid: T[]) => R[],
+    maxBytes: number
+  ): R[][] {
+    if (items.length === 0) return [];
+
+    const droppedBefore = this.metrics.eventsDropped;
+    try {
+      const valid = items.filter(item => item !== null && typeof item === 'object');
+      this.metrics.eventsDropped += items.length - valid.length;
+      return this.createByteAwareBatches(transform(valid), TELEMETRY_CONFIG.MAX_BATCH_SIZE, maxBytes);
+    } catch (error) {
+      // Defensive only — nothing above is expected to throw. Drop the whole
+      // stream for this call rather than let the throw escape the flush.
+      logger.debug(`Failed to prepare telemetry ${streamName}; dropping them:`, error);
+      this.metrics.eventsDropped = droppedBefore + items.length;
+      return [];
+    }
+  }
+
+  private prepareEventBatches(events: TelemetryEvent[]): TelemetryEvent[][] {
+    return this.prepareBatches(
+      events, 'events', valid => valid, TELEMETRY_CONFIG.MAX_BATCH_BYTES_EVENTS
+    );
+  }
+
+  private prepareWorkflowBatches(workflows: WorkflowTelemetry[]): WorkflowTelemetry[][] {
+    return this.prepareBatches(workflows, 'workflows', valid => {
+      const unique = this.deduplicateWorkflows(valid);
+      logger.debug(`Deduplicating workflows: ${valid.length} -> ${unique.length}`);
+      return unique;
+    }, TELEMETRY_CONFIG.MAX_BATCH_BYTES_WORKFLOWS);
+  }
+
+  private prepareMutationBatches(mutations: WorkflowMutationRecord[]): Record<string, any>[][] {
+    // Convert camelCase to snake_case for the ingest API's column names
+    // BEFORE batching, so the byte-size check measures what is actually
+    // sent (workflowAfter/operations can be large).
+    return this.prepareBatches(
+      mutations,
+      'workflow mutations',
+      valid => valid.map(mutation => mutationToSupabaseFormat(mutation)),
+      TELEMETRY_CONFIG.MAX_BATCH_BYTES_MUTATIONS
+    );
+  }
+
+  /**
+   * Send prepared event batches (see prepareEventBatches)
+   */
+  private async flushEvents(batches: TelemetryEvent[][]): Promise<boolean> {
+    try {
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const result = await this.executeWithTimeout(async () => {
+          const { error, dropped } = await this.ingestClient!
+            .from('telemetry_events')
+            .insert(batch);
+
+          // The server told us to drop this batch (400/413): it is neither
+          // retryable nor an error — treat it as sent, just not tracked.
+          if (dropped) {
+            return { dropped: true } as const;
+          }
+
+          if (error) {
+            throw error;
+          }
+
+          logger.debug(`Flushed batch of ${batch.length} telemetry events`);
+          return { dropped: false } as const;
+        }, 'Flush telemetry events');
+
+        if (result) {
+          if (result.dropped) {
+            this.metrics.eventsDropped += batch.length;
+          } else {
+            this.metrics.eventsTracked += batch.length;
+          }
+          this.metrics.batchesSent++;
+        } else {
+          const unsent = this.addUnsentBatchesToDeadLetterQueue(batches, batchIndex);
+          this.metrics.eventsFailed += unsent.itemCount;
+          this.metrics.batchesFailed += unsent.batchCount;
+          return false;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      logger.debug('Failed to flush events:', error);
+      throw new TelemetryError(
+        TelemetryErrorType.NETWORK_ERROR,
+        'Failed to flush events',
+        { error: error instanceof Error ? error.message : String(error) },
+        true
+      );
+    }
+  }
+
+  /**
+   * Send prepared, deduplicated workflow batches (see prepareWorkflowBatches)
+   */
+  private async flushWorkflows(batches: WorkflowTelemetry[][]): Promise<boolean> {
+    try {
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const result = await this.executeWithTimeout(async () => {
+          const { error, dropped } = await this.ingestClient!
+            .from('telemetry_workflows')
+            .insert(batch);
+
+          if (dropped) {
+            return { dropped: true } as const;
+          }
+
+          if (error) {
+            throw error;
+          }
+
+          logger.debug(`Flushed batch of ${batch.length} telemetry workflows`);
+          return { dropped: false } as const;
+        }, 'Flush telemetry workflows');
+
+        if (result) {
+          if (result.dropped) {
+            this.metrics.eventsDropped += batch.length;
+          } else {
+            this.metrics.eventsTracked += batch.length;
+          }
+          this.metrics.batchesSent++;
+        } else {
+          const unsent = this.addUnsentBatchesToDeadLetterQueue(batches, batchIndex);
+          this.metrics.eventsFailed += unsent.itemCount;
+          this.metrics.batchesFailed += unsent.batchCount;
+          return false;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      logger.debug('Failed to flush workflows:', error);
+      throw new TelemetryError(
+        TelemetryErrorType.NETWORK_ERROR,
+        'Failed to flush workflows',
+        { error: error instanceof Error ? error.message : String(error) },
+        true
+      );
+    }
+  }
+
+  /**
+   * Send prepared, snake_cased mutation batches (see prepareMutationBatches)
+   */
+  private async flushMutations(batches: Record<string, any>[][]): Promise<boolean> {
+    try {
+      let allBatchesSent = true;
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const result = await this.executeWithTimeout(async () => {
+          const { error, dropped } = await this.ingestClient!
+            .from('workflow_mutations')
+            .insert(batch);
+
+          if (dropped) {
+            return { dropped: true } as const;
+          }
+
+          if (error) {
+            // Enhanced error logging for mutation flushes
+            logger.error('Mutation insert error details:', {
+              message: (error as any).message,
+              status: (error as any).status,
+              fullError: String(error)
+            });
+            throw error;
+          }
+
+          logger.debug(`Flushed batch of ${batch.length} workflow mutations`);
+          return { dropped: false } as const;
+        }, 'Flush workflow mutations');
+
+        if (result) {
+          if (result.dropped) {
+            this.metrics.eventsDropped += batch.length;
+          } else {
+            this.metrics.eventsTracked += batch.length;
+          }
+          this.metrics.batchesSent++;
+        } else {
+          // A mutation batch that failed here is dropped, never parked in the
+          // dead letter queue. The timeout in executeWithTimeout is a race, so
+          // the insert usually commits after it fires; replaying the batch on
+          // every later flush wrote the same rows once a minute for days. The
+          // remaining batches are independent and still get their attempt.
+          this.metrics.eventsFailed += batch.length;
+          this.metrics.eventsDropped += batch.length;
+          this.metrics.batchesFailed++;
+          allBatchesSent = false;
+        }
+      }
+
+      return allBatchesSent;
+    } catch (error) {
+      logger.error('Failed to flush mutations with details:', {
+        errorMsg: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.constructor.name : typeof error
+      });
+      throw new TelemetryError(
+        TelemetryErrorType.NETWORK_ERROR,
+        'Failed to flush workflow mutations',
+        { error: error instanceof Error ? error.message : String(error) },
+        true
+      );
+    }
+  }
+
+  /**
+   * Execute one operation attempt bounded by the configured timeout
+   */
+  private async executeWithTimeout<T>(
+    operation: () => Promise<T>,
+    operationName: string
+  ): Promise<T | null> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let result: T | null;
+
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Operation timed out')), this.operationTimeout);
+
+        // A best-effort telemetry request must not keep the process alive.
+        if (typeof timeout === 'object' && timeout !== null && 'unref' in timeout) {
+          timeout.unref();
+        }
+      });
+
+      result = await Promise.race([operation(), timeoutPromise]) as T;
+    } catch (error) {
+      logger.debug(`${operationName} failed:`, error);
+      result = null;
+    }
+
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+
+    return result;
+  }
+
+  /**
+   * Create batches bounded by BOTH row count and serialized byte size.
+   *
+   * MAX_BATCH_SIZE (count) alone is not enough: a sanitized workflow or a
+   * workflow-mutation payload varies hugely in size, so a 50-row batch can
+   * still be many times larger than the server's per-stream request cap. A
+   * single row that alone exceeds maxBytes is sent alone rather than split —
+   * the server will 413 it and it is dropped (see the ingest client), which
+   * is the correct outcome for one pathological row.
+   *
+   * Each item's own serialized size is computed exactly once and reused as
+   * batches grow (an array's JSON byte length is exactly the sum of its
+   * items' own JSON byte lengths, plus 2 bytes for the brackets and 1 byte
+   * per separating comma — string escaping never depends on array
+   * position), rather than re-stringifying the whole growing batch on every
+   * item, which was O(n^2) for a large batch.
+   *
+   * Never throws. Each item is serialized on its own; an item that cannot be
+   * (a BigInt, a circular reference, undefined, or a toJSON returning
+   * undefined) is dropped and counted in metrics.eventsDropped, and every
+   * other item is batched normally.
+   */
+  private createByteAwareBatches<T>(items: T[], maxCount: number, maxBytes: number): T[][] {
+    const batches: T[][] = [];
+    let current: T[] = [];
+    let currentBytes = 0; // excludes the '[' + ']' brackets, added on push
+
+    for (const item of items) {
+      let serialized: string | undefined;
+      try {
+        serialized = JSON.stringify(item);
+      } catch (error) {
+        logger.debug('Dropping unserializable telemetry item:', error);
+      }
+      if (serialized === undefined) {
+        this.metrics.eventsDropped++;
+        continue;
+      }
+
+      const itemBytes = Buffer.byteLength(serialized);
+      const separatorBytes = current.length > 0 ? 1 : 0; // comma before this item
+      const candidateBytes = currentBytes + separatorBytes + itemBytes;
+      const fits = current.length + 1 <= maxCount && candidateBytes + 2 <= maxBytes;
+
+      if (fits) {
+        current.push(item);
+        currentBytes = candidateBytes;
+        continue;
+      }
+
+      if (current.length > 0) {
+        batches.push(current);
+      }
+      // Start fresh with just this item, even if it alone is over maxBytes —
+      // it is never split further, only ever grown from here.
+      current = [item];
+      currentBytes = itemBytes;
+    }
+
+    if (current.length > 0) {
+      batches.push(current);
+    }
+
+    return batches;
+  }
+
+  /**
+   * Deduplicate workflows by hash
+   */
+  private deduplicateWorkflows(workflows: WorkflowTelemetry[]): WorkflowTelemetry[] {
+    const seen = new Set<string>();
+    const unique: WorkflowTelemetry[] = [];
+
+    for (const workflow of workflows) {
+      if (!seen.has(workflow.workflow_hash)) {
+        seen.add(workflow.workflow_hash);
+        unique.push(workflow);
+      }
+    }
+
+    return unique;
+  }
+
+  /**
+   * Preserve the failed batch and every later batch that was not attempted.
+   */
+  private addUnsentBatchesToDeadLetterQueue<
+    T extends TelemetryEvent | WorkflowTelemetry
+  >(batches: T[][], failedBatchIndex: number): { itemCount: number; batchCount: number } {
+    const unsentBatches = batches.slice(failedBatchIndex);
+    const unsentItems = unsentBatches.flat();
+    this.addToDeadLetterQueue(unsentItems);
+
+    return {
+      itemCount: unsentItems.length,
+      batchCount: unsentBatches.length,
+    };
+  }
+
+  /**
+   * Add failed items to dead letter queue
+   */
+  private addToDeadLetterQueue(items: (TelemetryEvent | WorkflowTelemetry)[]): void {
+    for (const item of items) {
+      this.deadLetterQueue.push(item);
+
+      // Maintain max size
+      if (this.deadLetterQueue.length > this.maxDeadLetterSize) {
+        const dropped = this.deadLetterQueue.shift();
+        if (dropped) {
+          this.metrics.eventsDropped++;
+        }
+      }
+    }
+
+    logger.debug(`Added ${items.length} items to dead letter queue`);
+  }
+
+  /**
+   * Process dead letter queue when circuit is healthy.
+   *
+   * Returns whether the replay succeeded, so the caller can feed that
+   * outcome back into the circuit breaker — this is a real network attempt
+   * like any other and must not go unrecorded (see flushQueuedBatch).
+   * Returns null when every parked item was dropped during preparation, so
+   * no request was made and there is no outcome to record.
+   */
+  private async processDeadLetterQueue(): Promise<boolean | null> {
+    if (this.deadLetterQueue.length === 0) return true;
+
+    logger.debug(`Processing ${this.deadLetterQueue.length} items from dead letter queue`);
+
+    const events: TelemetryEvent[] = [];
+    const workflows: WorkflowTelemetry[] = [];
+
+    // Separate events and workflows. Mutations are never parked here: a
+    // replayed mutation duplicates a row that most likely already exists.
+    for (const item of this.deadLetterQueue) {
+      if ('workflow_hash' in item) {
+        workflows.push(item as WorkflowTelemetry);
+      } else {
+        events.push(item as TelemetryEvent);
+      }
+    }
+
+    // Clear dead letter queue
+    this.deadLetterQueue = [];
+
+    const eventBatches = this.prepareEventBatches(events);
+    const workflowBatches = this.prepareWorkflowBatches(workflows);
+    if (eventBatches.length === 0 && workflowBatches.length === 0) return null;
+
+    // Try to flush. A thrown error (flushEvents/flushWorkflows re-throw as a
+    // TelemetryError on an unexpected failure) counts as a failed replay too.
+    let succeeded = true;
+    try {
+      if (eventBatches.length > 0) {
+        succeeded = (await this.flushEvents(eventBatches)) && succeeded;
+      }
+      if (workflowBatches.length > 0) {
+        succeeded = (await this.flushWorkflows(workflowBatches)) && succeeded;
+      }
+    } catch (error) {
+      logger.debug('Dead letter queue replay failed:', error);
+      succeeded = false;
+    }
+
+    return succeeded;
+  }
+
+  /**
+   * Record flush time for metrics
+   */
+  private recordFlushTime(time: number): void {
+    this.flushTimes.push(time);
+
+    // Keep last 100 flush times
+    if (this.flushTimes.length > 100) {
+      this.flushTimes.shift();
+    }
+
+    // Update average
+    const sum = this.flushTimes.reduce((a, b) => a + b, 0);
+    this.metrics.averageFlushTime = Math.round(sum / this.flushTimes.length);
+    this.metrics.lastFlushTime = time;
+  }
+
+  /**
+   * Get processor metrics
+   */
+  getMetrics(): TelemetryMetrics & { circuitBreakerState: any; deadLetterQueueSize: number } {
+    return {
+      ...this.metrics,
+      circuitBreakerState: this.circuitBreaker.getState(),
+      deadLetterQueueSize: this.deadLetterQueue.length
+    };
+  }
+
+  /**
+   * Reset metrics
+   */
+  resetMetrics(): void {
+    this.metrics = {
+      eventsTracked: 0,
+      eventsDropped: 0,
+      eventsFailed: 0,
+      batchesSent: 0,
+      batchesFailed: 0,
+      averageFlushTime: 0,
+      rateLimitHits: 0
+    };
+    this.flushTimes = [];
+    this.circuitBreaker.reset();
+  }
+}

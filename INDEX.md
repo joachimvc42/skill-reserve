@@ -307,6 +307,72 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/playwright-cli/.claude/skills/playwright-triage` | Triage and fix one microsoft/playwright-cli issue, or do a maintainer's task, unattended inside the Issue triage GitHub Actions workflow (.github/workflows/triage.yml), which a needs-triage, needs-triage-mac or needs-… |
 | `skills/playwright-cli/skills/playwright-cli` | Automate browser interactions, test web pages and work with Playwright tests. |
 
+## Skills : n8n-skills
+
+| Skill | Description |
+|---|---|
+| `skills/n8n-skills/skills/n8n-agents` | Design n8n AI agents the right way. Use when building or editing any @n8n/n8n-nodes-langchain.* AI node — an AI Agent, LLM chain, Text Classifier, or Information Extractor — and whenever the user mentions AI agents, L… |
+| `skills/n8n-skills/skills/n8n-binary-and-data` | Handle files and binary data in n8n correctly. Use when working with files, images, PDFs, attachments, uploads or downloads, base64, vision/multimodal input, or when an AI agent needs a file as tool input or output — … |
+| `skills/n8n-skills/skills/n8n-code-javascript` | Write, review, or debug JavaScript in an n8n Code node. Use when a Code node is already in the workflow (editing it, fixing an error, choosing its mode, making it faster), or when a new one is justified: no native nod… |
+| `skills/n8n-skills/skills/n8n-code-python` | Write Python in n8n Code nodes (native Python, `language` pythonNative, n8n 2.x). Use when the user explicitly wants Python in a Code node, when migrating old Pyodide/"Python (Beta)" code that used _input/_json/_node/… |
+| `skills/n8n-skills/skills/n8n-code-tool` | Write JavaScript or Python for the n8n Custom Code Tool (@n8n/n8n-nodes-langchain.toolCode) — the AI-agent-callable tool, NOT the workflow Code node. Use when building a Code Tool attached to an AI Agent, writing code… |
+| `skills/n8n-skills/skills/n8n-error-handling` | Wire n8n error handling so failures are loud, structured, and recoverable. Use when building any webhook/API workflow, a scheduled or unattended workflow, or any path where a silent failure would drop user-visible wor… |
+| `skills/n8n-skills/skills/n8n-expression-syntax` | Validate n8n expression syntax and fix common errors. Use when writing n8n expressions, using {{}} syntax, accessing $json/$node variables, troubleshooting expression errors, mapping data between nodes, or referencing… |
+| `skills/n8n-skills/skills/n8n-mcp-tools-expert` | Expert guide for using n8n-mcp MCP tools effectively. Use when searching for nodes, validating configurations, accessing templates, managing workflows, organizing workflows into folders, managing credentials, auditing… |
+| `skills/n8n-skills/skills/n8n-multi-instance` | Use when an n8n-mcp account targets more than one n8n instance — i.e. the `n8n_instances` tool is available, the user mentions multiple n8n instances or environments (prod vs staging, several teams or clients), severa… |
+| `skills/n8n-skills/skills/n8n-node-configuration` | Operation-aware node configuration guidance. Use when configuring nodes, understanding property dependencies, determining required fields, choosing between get_node detail levels, or learning common configuration patt… |
+| `skills/n8n-skills/skills/n8n-self-hosting` | Deploy a production self-hosted n8n end-to-end to a fresh Linux VM over SSH, using Docker Compose behind a Caddy reverse proxy with automatic HTTPS. Use whenever the user wants to self-host, install, provision, or dep… |
+| `skills/n8n-skills/skills/n8n-subworkflows` | Build reusable, composable n8n sub-workflows. Use when extracting shared logic, building anything multi-step or reused across workflows, or any workflow over ~10 nodes — and whenever the user mentions sub-workflows, E… |
+| `skills/n8n-skills/skills/n8n-validation-expert` | Interpret validation errors and guide fixing them. Use when encountering validation errors, validation warnings, false positives, operator structure issues, or need help understanding validation results. Also use when… |
+| `skills/n8n-skills/skills/n8n-workflow-patterns` | Proven workflow architectural patterns from real n8n workflows. Use when building new workflows, designing workflow structure, choosing workflow patterns, planning workflow architecture, or asking about webhook proces… |
+| `skills/n8n-skills/skills/using-n8n-mcp-skills` | Use when building, editing, validating, testing, or debugging an n8n workflow through the n8n-mcp MCP server — designing a flow, configuring a node, writing an expression or Code node, wiring credentials, or fixing on… |
+
+## Skills : n8n-mcp
+
+| Skill | Description |
+|---|---|
+| `skills/n8n-mcp/data/skills/n8n-agents` | Design n8n AI agents the right way. Use when building or editing any @n8n/n8n-nodes-langchain.* AI node — an AI Agent, LLM chain, Text Classifier, or Information Extractor — and whenever the user mentions AI agents, L… |
+| `skills/n8n-mcp/data/skills/n8n-binary-and-data` | Handle files and binary data in n8n correctly. Use when working with files, images, PDFs, attachments, uploads or downloads, base64, vision/multimodal input, or when an AI agent needs a file as tool input or output — … |
+| `skills/n8n-mcp/data/skills/n8n-code-javascript` | Write JavaScript code in n8n Code nodes. Use when writing JavaScript in n8n, using $input/$json/$node syntax, making HTTP requests with this.helpers / the $helpers global, working with dates using DateTime, troublesho… |
+| `skills/n8n-mcp/data/skills/n8n-code-python` | Write Python code in n8n Code nodes. Use when writing Python in n8n, using _input/_json/_node syntax, working with standard library, or need to understand Python limitations in n8n Code nodes. Use this skill when the … |
+| `skills/n8n-mcp/data/skills/n8n-code-tool` | Write JavaScript or Python for the n8n Custom Code Tool (@n8n/n8n-nodes-langchain.toolCode) — the AI-agent-callable tool, NOT the workflow Code node. Use when building a Code Tool attached to an AI Agent, writing code… |
+| `skills/n8n-mcp/data/skills/n8n-error-handling` | Wire n8n error handling so failures are loud, structured, and recoverable. Use when building any webhook/API workflow, a scheduled or unattended workflow, or any path where a silent failure would drop user-visible wor… |
+| `skills/n8n-mcp/data/skills/n8n-expression-syntax` | Validate n8n expression syntax and fix common errors. Use when writing n8n expressions, using {{}} syntax, accessing $json/$node variables, troubleshooting expression errors, mapping data between nodes, or referencing… |
+| `skills/n8n-mcp/data/skills/n8n-mcp-tools-expert` | Expert guide for using n8n-mcp MCP tools effectively. Use when searching for nodes, validating configurations, accessing templates, managing workflows, organizing workflows into folders, managing credentials, auditing… |
+| `skills/n8n-mcp/data/skills/n8n-multi-instance` | Use when an n8n-mcp account targets more than one n8n instance — i.e. the `n8n_instances` tool is available, the user mentions multiple n8n instances or environments (prod vs staging, several teams or clients), a work… |
+| `skills/n8n-mcp/data/skills/n8n-node-configuration` | Operation-aware node configuration guidance. Use when configuring nodes, understanding property dependencies, determining required fields, choosing between get_node detail levels, or learning common configuration patt… |
+| `skills/n8n-mcp/data/skills/n8n-self-hosting` | Deploy a production self-hosted n8n end-to-end to a fresh Linux VM over SSH, using Docker Compose behind a Caddy reverse proxy with automatic HTTPS. Use whenever the user wants to self-host, install, set up, provision… |
+| `skills/n8n-mcp/data/skills/n8n-subworkflows` | Build reusable, composable n8n sub-workflows. Use when extracting shared logic, building anything multi-step or reused across workflows, or any workflow over ~10 nodes — and whenever the user mentions sub-workflows, E… |
+| `skills/n8n-mcp/data/skills/n8n-validation-expert` | Interpret validation errors and guide fixing them. Use when encountering validation errors, validation warnings, false positives, operator structure issues, or need help understanding validation results. Also use when… |
+| `skills/n8n-mcp/data/skills/n8n-workflow-patterns` | Proven workflow architectural patterns from real n8n workflows. Use when building new workflows, designing workflow structure, choosing workflow patterns, planning workflow architecture, or asking about webhook proces… |
+| `skills/n8n-mcp/data/skills/using-n8n-mcp-skills` | Use when building, editing, validating, testing, or debugging an n8n workflow through the n8n-mcp MCP server — designing a flow, configuring a node, writing an expression or Code node, wiring credentials, or fixing on… |
+
+## Skills : browser-harness
+
+| Skill | Description |
+|---|---|
+| `skills/browser-harness` | Control a real browser via CDP: clicking, typing, navigation, logged-in sessions, JS-rendered or bot-protected pages. Not for plain HTTP fetches of public content - use curl for those. |
+| `skills/browser-harness/skills/browser-harness` | Control a real browser via CDP: clicking, typing, navigation, logged-in sessions, JS-rendered or bot-protected pages. Not for plain HTTP fetches of public content - use curl for those. |
+| `skills/browser-harness/src/browser_harness` | Control a real browser via CDP: clicking, typing, navigation, logged-in sessions, JS-rendered or bot-protected pages. Not for plain HTTP fetches of public content - use curl for those. |
+
+## Skills : career-ops
+
+| Skill | Description |
+|---|---|
+| `skills/career-ops/.claude/skills/career-ops` | Open-source AI job search agent -- evaluate offers, generate CVs, scan portals, track applications. Use when the user pastes a job URL or JD, asks to scan portals, generate a CV/PDF, track applications, prepare for in… |
+
+## Skills : design-extract
+
+| Skill | Description |
+|---|---|
+| `skills/design-extract/skills/extract-design` | Extract the full design language from any website URL. Produces 8 output files including AI-optimized markdown, visual HTML preview, Tailwind config, React theme, shadcn/ui theme, Figma variables, W3C design tokens, a… |
+
+## Skills : codeburn
+
+| Skill | Description |
+|---|---|
+| `skills/codeburn/plugins/codeburn/skills/cost` | Show what AI coding tools cost today, from CodeBurn. Use when the user asks about today's AI spend or token use, or which model or project cost the most. |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

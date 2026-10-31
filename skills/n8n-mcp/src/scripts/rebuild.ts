@@ -1,0 +1,395 @@
+#!/usr/bin/env node
+/**
+ * Copyright (c) 2024 AiAdvisors Romuald Czlonkowski
+ * Licensed under the Sustainable Use License v1.0
+ */
+import { createDatabaseAdapter } from '../database/database-adapter';
+import { N8nNodeLoader } from '../loaders/node-loader';
+import { NodeParser, ParsedNode, ParsedNodeVersion } from '../parsers/node-parser';
+import { DocsMapper } from '../mappers/docs-mapper';
+import { NodeRepository } from '../database/node-repository';
+import { ToolVariantGenerator } from '../services/tool-variant-generator';
+import { TemplateSanitizer } from '../utils/template-sanitizer';
+import { assertCoreNodesPresent } from './core-node-check';
+import * as fs from 'fs';
+import * as path from 'path';
+
+async function rebuild() {
+  console.log('🔄 Rebuilding n8n node database...\n');
+  
+  const dbPath = process.env.NODE_DB_PATH || './data/nodes.db';
+  const db = await createDatabaseAdapter(dbPath);
+  const loader = new N8nNodeLoader();
+  const parser = new NodeParser();
+  const mapper = new DocsMapper();
+  const repository = new NodeRepository(db);
+  const toolVariantGenerator = new ToolVariantGenerator();
+  
+  // Initialize database
+  const schema = fs.readFileSync(path.join(__dirname, '../../src/database/schema.sql'), 'utf8');
+  db.exec(schema);
+  
+  // Clear existing data, but preserve community nodes (is_community = 1).
+  // Community nodes are fetched separately (npm run fetch:community) and are not
+  // part of the installed n8n packages, so a full wipe would drop them on every
+  // rebuild and force a manual backup/restore. Scoping the delete to core/base
+  // nodes lets them survive the rebuild automatically.
+  // Version rows first: node_versions cascades from nodes only when the adapter
+  // enforces foreign keys, which the sql.js fallback does not.
+  db.exec(`DELETE FROM node_versions WHERE node_type IN (
+    SELECT node_type FROM nodes WHERE is_community = 0 OR is_community IS NULL
+  )`);
+  db.exec('DELETE FROM nodes WHERE is_community = 0 OR is_community IS NULL');
+  // Retired in 2.78.0: version comparisons diff the stored schemas instead
+  db.exec('DROP TABLE IF EXISTS version_property_changes');
+  console.log('🗑️  Cleared core/base nodes (community nodes preserved)\n');
+  
+  // Load all nodes
+  const nodes = await loader.loadAllNodes();
+  console.log(`📦 Loaded ${nodes.length} nodes from packages\n`);
+  
+  // Statistics
+  const stats = {
+    successful: 0,
+    failed: 0,
+    aiTools: 0,
+    triggers: 0,
+    webhooks: 0,
+    withProperties: 0,
+    withOperations: 0,
+    withDocs: 0,
+    toolVariants: 0,
+    versionRows: 0
+  };
+  
+  // Process each node (documentation fetching must be outside transaction due to async)
+  console.log('🔄 Processing nodes...');
+  const processedNodes: Array<{
+    parsed: ParsedNode;
+    docs: string | undefined;
+    nodeName: string;
+    versions: ParsedNodeVersion[];
+  }> = [];
+  
+  for (const { packageName, nodeName, NodeClass } of nodes) {
+    try {
+      // Parse node
+      const parsed = parser.parse(NodeClass, packageName);
+
+      // Validate parsed data
+      if (!parsed.nodeType || !parsed.displayName) {
+        throw new Error(`Missing required fields - nodeType: ${parsed.nodeType}, displayName: ${parsed.displayName}, packageName: ${parsed.packageName}`);
+      }
+
+      // Additional validation for required fields
+      if (!parsed.packageName) {
+        throw new Error(`Missing packageName for node ${nodeName}`);
+      }
+
+      // Get documentation
+      const docs = await mapper.fetchDocumentation(parsed.nodeType);
+      parsed.documentation = docs || undefined;
+
+      // Every typeVersion n8n accepts for this node, for version history and schema diffs
+      const versions = parser.parseVersions(NodeClass, packageName);
+
+      // Generate Tool variant for nodes with usableAsTool: true
+      if (parsed.isAITool && !parsed.isTrigger) {
+        const toolVariant = toolVariantGenerator.generateToolVariant(parsed);
+        if (toolVariant) {
+          // Mark base node as having a Tool variant
+          parsed.hasToolVariant = true;
+
+          // Add Tool variant to processed nodes
+          processedNodes.push({
+            parsed: toolVariant,
+            docs: undefined, // Tool variants don't have separate docs
+            nodeName: `${nodeName}Tool`,
+            // Version rows live on the base node; the repository resolves Tool variants to it
+            versions: []
+          });
+          stats.toolVariants++;
+        }
+      }
+
+      processedNodes.push({ parsed, docs: docs || undefined, nodeName, versions });
+    } catch (error) {
+      stats.failed++;
+      const errorMessage = (error as Error).message;
+      console.error(`❌ Failed to process ${nodeName}: ${errorMessage}`);
+    }
+  }
+  
+  // Now save all processed nodes to database
+  console.log(`\n💾 Saving ${processedNodes.length} processed nodes to database...`);
+  
+  let saved = 0;
+  for (const { parsed, docs, nodeName, versions } of processedNodes) {
+    try {
+      // A node and its version rows land together or not at all
+      db.transaction(() => {
+        repository.saveNode(parsed);
+        for (const version of versions) {
+          repository.saveNodeVersion({
+            nodeType: version.nodeType,
+            version: version.version,
+            packageName: version.packageName,
+            displayName: version.displayName,
+            description: version.description,
+            category: version.category,
+            isCurrentMax: version.isCurrentMax,
+            propertiesSchema: version.properties,
+            operations: version.operations,
+            credentialsRequired: version.credentials,
+            outputs: version.outputs,
+            addedProperties: version.addedProperties,
+            deprecatedProperties: version.deprecatedProperties
+          });
+        }
+      });
+      saved++;
+      stats.versionRows += versions.length;
+      
+      // Update statistics
+      stats.successful++;
+      if (parsed.isAITool) stats.aiTools++;
+      if (parsed.isTrigger) stats.triggers++;
+      if (parsed.isWebhook) stats.webhooks++;
+      if (parsed.properties.length > 0) stats.withProperties++;
+      if (parsed.operations.length > 0) stats.withOperations++;
+      if (docs) stats.withDocs++;
+      
+      console.log(`✅ ${parsed.nodeType} [Props: ${parsed.properties.length}, Ops: ${parsed.operations.length}]`);
+    } catch (error) {
+      stats.failed++;
+      const errorMessage = (error as Error).message;
+      console.error(`❌ Failed to save ${nodeName}: ${errorMessage}`);
+    }
+  }
+  
+  console.log(`💾 Save completed: ${saved} nodes saved successfully`);
+
+  // Community rows survive the rebuild untouched, so rows written before bulk columns
+  // were compressed (#1067) are rewritten here; core rows were already saved compressed.
+  // Runs before the FTS rebuild so the update trigger cannot leave the index out of step.
+  const { rewritten } = repository.compressStoredColumns();
+  if (rewritten > 0) {
+    console.log(`\n📦 Compressed bulk columns on ${rewritten} previously plain node row(s)`);
+  }
+
+  // Rebuild FTS5 index to guarantee consistency.
+  // The content-synced FTS5 table (content=nodes) can accumulate stale rowid
+  // references when rows are deleted and re-inserted during a rebuild cycle.
+  // An explicit rebuild re-indexes all current rows from the nodes table.
+  console.log('\n🔍 Rebuilding FTS5 search index...');
+  db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
+  console.log('✅ FTS5 index rebuilt successfully');
+
+  // Hard completeness gate: every canonical core node must exist after a
+  // rebuild. A silently dropped core node (e.g. extractFromFile) makes the
+  // validator hard-error on valid workflows, so fail the build loudly.
+  console.log('\n🧩 Checking core node completeness...');
+  try {
+    assertCoreNodesPresent(repository);
+    console.log('✅ All canonical core nodes present');
+  } catch (error) {
+    console.error(`❌ ${(error as Error).message}`);
+    db.close();
+    process.exit(1);
+  }
+
+  // Validation check
+  console.log('\n🔍 Running validation checks...');
+  try {
+    const validationResults = validateDatabase(repository);
+    
+    if (!validationResults.passed) {
+      console.log('⚠️  Validation Issues:');
+      validationResults.issues.forEach(issue => console.log(`   - ${issue}`));
+    } else {
+      console.log('✅ All validation checks passed');
+    }
+  } catch (validationError) {
+    console.error('❌ Validation failed:', (validationError as Error).message);
+    console.log('⚠️  Skipping validation due to database compatibility issues');
+  }
+  
+  // Summary
+  console.log('\n📊 Summary:');
+  console.log(`   Total nodes: ${nodes.length}`);
+  console.log(`   Successful: ${stats.successful}`);
+  console.log(`   Failed: ${stats.failed}`);
+  console.log(`   AI Tools: ${stats.aiTools}`);
+  console.log(`   Tool Variants: ${stats.toolVariants}`);
+  console.log(`   Version rows: ${stats.versionRows}`);
+
+  // Deleting and re-inserting every core node leaves free pages behind;
+  // reclaim them so the committed file reflects its content.
+  db.exec('VACUUM');
+
+  // Every node with version rows must mark exactly one current version
+  const inconsistent = db.prepare(`
+    SELECT node_type FROM node_versions GROUP BY node_type HAVING SUM(is_current_max) != 1
+  `).all() as Array<{ node_type: string }>;
+  if (inconsistent.length > 0) {
+    throw new Error(`Version rows without exactly one current version: ${inconsistent.map(r => r.node_type).join(', ')}`);
+  }
+  console.log(`   Triggers: ${stats.triggers}`);
+  console.log(`   Webhooks: ${stats.webhooks}`);
+  console.log(`   With Properties: ${stats.withProperties}`);
+  console.log(`   With Operations: ${stats.withOperations}`);
+  console.log(`   With Documentation: ${stats.withDocs}`);
+  
+  // Sanitize templates if they exist
+  console.log('\n🧹 Checking for templates to sanitize...');
+  const templateCount = db.prepare('SELECT COUNT(*) as count FROM templates').get() as { count: number };
+  
+  if (templateCount && templateCount.count > 0) {
+    console.log(`   Found ${templateCount.count} templates, sanitizing...`);
+    const sanitizer = new TemplateSanitizer();
+    let sanitizedCount = 0;
+    
+    const templates = db.prepare('SELECT id, name, workflow_json FROM templates').all() as any[];
+    for (const template of templates) {
+      const originalWorkflow = JSON.parse(template.workflow_json);
+      const { sanitized: sanitizedWorkflow, wasModified } = sanitizer.sanitizeWorkflow(originalWorkflow);
+      
+      if (wasModified) {
+        const stmt = db.prepare('UPDATE templates SET workflow_json = ? WHERE id = ?');
+        stmt.run(JSON.stringify(sanitizedWorkflow), template.id);
+        sanitizedCount++;
+        console.log(`   ✅ Sanitized template ${template.id}: ${template.name}`);
+      }
+    }
+    
+    console.log(`   Sanitization complete: ${sanitizedCount} templates cleaned`);
+  } else {
+    console.log('   No templates found in database');
+  }
+  
+  console.log('\n✨ Rebuild complete!');
+
+  db.close();
+
+  // After close: the sql.js adapter writes the file only when it closes, so an earlier
+  // stat would see the previous file or none at all.
+  checkDatabaseSize(dbPath);
+}
+
+// The database is committed to git; GitHub rejects files over 100 MiB outright.
+const GITHUB_FILE_LIMIT_MIB = 100;
+const SIZE_WARNING_MIB = 90;
+
+function checkDatabaseSize(dbPath: string): void {
+  const sizeMiB = fs.statSync(dbPath).size / (1024 * 1024);
+  const sizeLabel = `${sizeMiB.toFixed(1)} MiB`;
+  console.log(`   Database size: ${sizeLabel}`);
+  if (sizeMiB >= GITHUB_FILE_LIMIT_MIB) {
+    throw new Error(`${dbPath} is ${sizeLabel}, over GitHub's ${GITHUB_FILE_LIMIT_MIB} MiB file limit; it cannot be pushed`);
+  }
+  if (sizeMiB >= SIZE_WARNING_MIB) {
+    console.warn(`⚠️  ${dbPath} is ${sizeLabel}, within ${GITHUB_FILE_LIMIT_MIB - SIZE_WARNING_MIB} MiB of GitHub's ${GITHUB_FILE_LIMIT_MIB} MiB file limit`);
+  }
+}
+
+// Expected minimum based on n8n v1.123.4 AI-capable nodes
+const MIN_EXPECTED_TOOL_VARIANTS = 200;
+
+function validateDatabase(repository: NodeRepository): { passed: boolean; issues: string[] } {
+  const issues = [];
+
+  try {
+    const db = (repository as any).db;
+
+    // CRITICAL: Check if database has any nodes at all
+    const nodeCount = db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number };
+    if (nodeCount.count === 0) {
+      issues.push('CRITICAL: Database is empty - no nodes found! Rebuild failed or was interrupted.');
+      return { passed: false, issues };
+    }
+
+    // Check minimum expected node count (should have at least 500 nodes from both packages)
+    if (nodeCount.count < 500) {
+      issues.push(`WARNING: Only ${nodeCount.count} nodes found - expected at least 500 (both n8n packages)`);
+    }
+
+    // Check critical nodes
+    const criticalNodes = ['nodes-base.httpRequest', 'nodes-base.code', 'nodes-base.webhook', 'nodes-base.slack'];
+
+    for (const nodeType of criticalNodes) {
+      const node = repository.getNode(nodeType);
+
+      if (!node) {
+        issues.push(`Critical node ${nodeType} not found`);
+        continue;
+      }
+
+      if (node.properties.length === 0) {
+        issues.push(`Node ${nodeType} has no properties`);
+      }
+    }
+
+    // Check AI tools
+    const aiTools = repository.getAITools();
+    if (aiTools.length === 0) {
+      issues.push('No AI tools found - check detection logic');
+    }
+
+    // Check Tool variants
+    const toolVariantCount = repository.getToolVariantCount();
+    if (toolVariantCount === 0) {
+      issues.push('No Tool variants found - check ToolVariantGenerator');
+    } else if (toolVariantCount < MIN_EXPECTED_TOOL_VARIANTS) {
+      issues.push(`Only ${toolVariantCount} Tool variants found - expected at least ${MIN_EXPECTED_TOOL_VARIANTS}`);
+    }
+
+    // Check FTS5 table existence and population
+    const ftsTableCheck = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type='table' AND name='nodes_fts'
+    `).get();
+
+    if (!ftsTableCheck) {
+      issues.push('CRITICAL: FTS5 table (nodes_fts) does not exist - searches will fail or be very slow');
+    } else {
+      // Check if FTS5 table is properly populated
+      const ftsCount = db.prepare('SELECT COUNT(*) as count FROM nodes_fts').get() as { count: number };
+
+      if (ftsCount.count === 0) {
+        issues.push('CRITICAL: FTS5 index is empty - searches will return zero results');
+      } else if (nodeCount.count !== ftsCount.count) {
+        issues.push(`FTS5 index out of sync: ${nodeCount.count} nodes but ${ftsCount.count} FTS5 entries`);
+      }
+
+      // Verify critical nodes are searchable via FTS5
+      const searchableNodes = ['webhook', 'merge', 'split'];
+      for (const searchTerm of searchableNodes) {
+        const searchResult = db.prepare(`
+          SELECT COUNT(*) as count FROM nodes_fts
+          WHERE nodes_fts MATCH ?
+        `).get(searchTerm);
+
+        if (searchResult.count === 0) {
+          issues.push(`CRITICAL: Search for "${searchTerm}" returns zero results in FTS5 index`);
+        }
+      }
+    }
+  } catch (error) {
+    // Catch any validation errors
+    const errorMessage = (error as Error).message;
+    issues.push(`Validation error: ${errorMessage}`);
+  }
+
+  return {
+    passed: issues.length === 0,
+    issues
+  };
+}
+
+// Run if called directly
+if (require.main === module) {
+  rebuild().catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
+}

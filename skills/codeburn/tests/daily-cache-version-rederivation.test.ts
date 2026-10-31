@@ -1,0 +1,233 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
+
+import {
+  DAILY_CACHE_VERSION,
+  currentTzKey,
+  ensureCacheHydrated,
+  loadDailyCache,
+  toDateString,
+  type DailyEntry,
+} from '../src/daily-cache.js'
+
+// One below the current version, so this pins the ADJACENT-version case: v20
+// is the SHIPPED predecessor (#1040, codex model attribution), and its days
+// must be re-derived rather than adopted as finalized under a number that now
+// means different accounting. Anything below MIN_SUPPORTED_VERSION is
+// untrusted, which is what makes the re-derivation global rather than
+// provider-scoped.
+const PRE_FIX_DAILY_VERSION = 20
+const cacheRoot = join(tmpdir(), `codeburn-daily-rederive-${process.pid}-${Date.now()}`)
+
+function day(date: string, cost: number): DailyEntry {
+  return {
+    date,
+    cost,
+    savingsUSD: 0,
+    calls: 1,
+    sessions: 1,
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: 30,
+    cacheWriteTokens: 0,
+    editTurns: 0,
+    oneShotTurns: 0,
+    models: {
+      'Grok Build': {
+        calls: 1,
+        cost,
+        savingsUSD: 0,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 0,
+      },
+    },
+    categories: {},
+    providers: {
+      grok: {
+        calls: 1,
+        cost,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 0,
+      },
+    },
+  }
+}
+
+beforeEach(async () => {
+  process.env['CODEBURN_CACHE_DIR'] = cacheRoot
+  await rm(cacheRoot, { recursive: true, force: true })
+  await mkdir(cacheRoot, { recursive: true })
+})
+
+afterEach(async () => {
+  await rm(cacheRoot, { recursive: true, force: true })
+})
+
+// Raising MIN_SUPPORTED_VERSION re-derives EVERY day from EVERY provider - the
+// daily cache has no per-provider invalidation. Which provider the seeded day
+// belongs to is incidental; the mechanism under test is version-wide.
+describe('daily-cache re-derivation on a DAILY_CACHE_VERSION bump', () => {
+  it('re-derives a day from a below-minimum v20 cache while preserving the old file', async () => {
+    const date = toDateString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    const oldPath = join(cacheRoot, `daily-cache.v${PRE_FIX_DAILY_VERSION}.json`)
+    const oldCache = {
+      version: PRE_FIX_DAILY_VERSION,
+      savingsConfigHash: 'cfg',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [day(date, 99)],
+      complete: true,
+      watermarkTrusted: true,
+    }
+    await writeFile(oldPath, JSON.stringify(oldCache))
+
+    let parseCount = 0
+    const corrected = day(date, 2)
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCount++
+        return []
+      },
+      () => [corrected],
+      'cfg',
+      () => true,
+    )
+
+    const refreshedDay = hydrated.days.find(entry => entry.date === date)
+    expect(parseCount).toBe(1)
+    expect(refreshedDay?.providers.grok?.cost).toBe(2)
+    expect(refreshedDay?.cost).toBe(2)
+    expect(JSON.parse(await readFile(oldPath, 'utf8'))).toEqual(oldCache)
+  })
+})
+
+// v30 is claimed by two open branches at once: this one and #1132. A v30 file
+// on disk therefore carries UNKNOWN accounting, so adopting it as the
+// finalized base would serve #1132's numbers under this branch's contract.
+describe('daily-cache adoption of a v30 file written under a different accounting', () => {
+  it('carries its days forward but never adopts it as the finalized base', async () => {
+    const date = toDateString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    const foreign = day(date, 42)
+    foreign.providers = {
+      hermes: {
+        calls: 1,
+        cost: 42,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 0,
+      },
+    }
+    await writeFile(
+      join(cacheRoot, 'daily-cache.v30.json'),
+      JSON.stringify({
+        version: 30,
+        savingsConfigHash: 'cfg',
+        tzKey: currentTzKey(),
+        lastComputedDate: yesterday,
+        days: [foreign],
+        complete: true,
+        watermarkTrusted: true,
+      }),
+    )
+
+    const loaded = await loadDailyCache()
+
+    expect(loaded.version).toBe(DAILY_CACHE_VERSION)
+    // A v30 candidate must not satisfy same-version adoption, so its trust
+    // markers cannot survive migration to the current cache version.
+    expect(loaded.complete).toBe(false)
+    expect(loaded.watermarkTrusted).toBe(false)
+    const carried = loaded.days.find(entry => entry.date === date)
+    expect(carried?.carried).toBe(true)
+    expect(loaded.pendingRederive).toContain('hermes')
+    expect(loaded.pendingRederive).toContain('dsh')
+  })
+})
+
+describe('cursor-agent re-derive after Cursor IDE chats moved to cursor (v73)', () => {
+  function withSlices(date: string, providers: Record<string, number>): DailyEntry {
+    const entry = day(date, 0)
+    entry.providers = {}
+    entry.models = {}
+    entry.calls = 0
+    for (const [name, cost] of Object.entries(providers)) {
+      entry.providers[name] = { ...day(date, cost).providers.grok! }
+      entry.cost += cost
+      entry.calls += 1
+    }
+    return entry
+  }
+
+  it('drops the old cursor-agent slice only where the fresh parse has a cursor slice instead', async () => {
+    const moved = toDateString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    const pruned = toDateString(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    await writeFile(join(cacheRoot, 'daily-cache.v72.json'), JSON.stringify({
+      version: 72,
+      savingsConfigHash: 'cfg',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [withSlices(moved, { 'cursor-agent': 5, claude: 1 }), withSlices(pruned, { 'cursor-agent': 3, claude: 1 })],
+      complete: true,
+      watermarkTrusted: true,
+    }))
+
+    const hydrated = await ensureCacheHydrated(
+      async () => [],
+      () => [withSlices(moved, { cursor: 2, claude: 1 }), withSlices(pruned, { claude: 1 })],
+      'cfg',
+      () => true,
+    )
+
+    const movedDay = hydrated.days.find(entry => entry.date === moved)!
+    expect(movedDay.providers['cursor-agent']).toBeUndefined()
+    expect(movedDay.providers.cursor?.cost).toBe(2)
+    expect(movedDay.cost).toBe(3)
+    const prunedDay = hydrated.days.find(entry => entry.date === pruned)!
+    expect(prunedDay.providers['cursor-agent']?.cost).toBe(3)
+    expect(prunedDay.cost).toBe(4)
+  })
+})
+
+describe('copilot re-derive after chat-session twins moved to the agent host (v75)', () => {
+  it('replaces a settled copilot slice with fewer fresh calls and leaves other providers alone', async () => {
+    const settled = toDateString(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    const slice = (calls: number, cost: number) => ({ ...day(settled, cost).providers.grok!, calls })
+    const entry = (copilotCalls: number, copilotCost: number): DailyEntry => ({
+      ...day(settled, copilotCost + 1),
+      calls: copilotCalls + 1,
+      providers: { copilot: slice(copilotCalls, copilotCost), claude: slice(1, 1) },
+      models: {},
+    })
+    await writeFile(join(cacheRoot, 'daily-cache.v74.json'), JSON.stringify({
+      version: 74,
+      savingsConfigHash: 'cfg',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [entry(5, 9)],
+      complete: true,
+      watermarkTrusted: true,
+    }))
+
+    const hydrated = await ensureCacheHydrated(async () => [], () => [entry(3, 4)], 'cfg', () => true)
+
+    const settledDay = hydrated.days.find(d => d.date === settled)!
+    expect(settledDay.providers.copilot).toMatchObject({ calls: 3, cost: 4 })
+    expect(settledDay.providers.claude).toMatchObject({ calls: 1, cost: 1 })
+    expect(hydrated.pendingRederive).toBeUndefined()
+  })
+})

@@ -1,0 +1,2844 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { handleUpdatePartialWorkflow } from '@/mcp/handlers-workflow-diff';
+import { WorkflowDiffEngine } from '@/services/workflow-diff-engine';
+import { N8nApiClient } from '@/services/n8n-api-client';
+import {
+  N8nApiError,
+  N8nAuthenticationError,
+  N8nNotFoundError,
+  N8nValidationError,
+  N8nRateLimitError,
+  N8nServerError,
+} from '@/utils/n8n-errors';
+import { z } from 'zod';
+
+const telemetryMocks = vi.hoisted(() => ({
+  trackWorkflowMutation: vi.fn(),
+}));
+
+// Mock dependencies
+vi.mock('@/services/workflow-diff-engine');
+vi.mock('@/services/n8n-api-client');
+vi.mock('@/config/n8n-api');
+vi.mock('@/utils/logger');
+vi.mock('@/telemetry/telemetry-manager', () => ({
+  telemetry: {
+    trackWorkflowMutation: telemetryMocks.trackWorkflowMutation,
+  },
+}));
+vi.mock('@/mcp/handlers-n8n-manager', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/mcp/handlers-n8n-manager')>();
+  return {
+    ...actual,
+    getN8nApiClient: vi.fn(),
+  };
+});
+
+// Import mocked modules
+import { getN8nApiClient } from '@/mcp/handlers-n8n-manager';
+import { logger } from '@/utils/logger';
+import type { NodeRepository } from '@/database/node-repository';
+
+describe('handlers-workflow-diff', () => {
+  let mockApiClient: any;
+  let mockDiffEngine: any;
+  let mockRepository: NodeRepository;
+
+  // Helper function to create test workflow
+  const createTestWorkflow = (overrides = {}) => ({
+    id: 'test-workflow-id',
+    name: 'Test Workflow',
+    active: true,
+    nodes: [
+      {
+        id: 'node1',
+        name: 'Start',
+        type: 'n8n-nodes-base.start',
+        typeVersion: 1,
+        position: [100, 100],
+        parameters: {},
+      },
+      {
+        id: 'node2',
+        name: 'HTTP Request',
+        type: 'n8n-nodes-base.httpRequest',
+        typeVersion: 3,
+        position: [300, 100],
+        parameters: { url: 'https://api.test.com' },
+      },
+    ],
+    connections: {
+      'Start': {
+        main: [[{ node: 'HTTP Request', type: 'main', index: 0 }]],
+      },
+    },
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    tags: [],
+    settings: {},
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    telemetryMocks.trackWorkflowMutation.mockResolvedValue(undefined);
+
+    // Setup mock API client
+    mockApiClient = {
+      getWorkflow: vi.fn(),
+      updateWorkflow: vi.fn(),
+      listTags: vi.fn().mockResolvedValue({ data: [] }),
+      createTag: vi.fn(),
+      updateWorkflowTags: vi.fn().mockResolvedValue([]),
+      transferWorkflow: vi.fn().mockResolvedValue(undefined),
+    };
+
+    // Setup mock diff engine
+    mockDiffEngine = {
+      applyDiff: vi.fn(),
+    };
+
+    // Setup mock repository
+    mockRepository = {} as NodeRepository;
+
+    // Mock the API client getter
+    vi.mocked(getN8nApiClient).mockReturnValue(mockApiClient);
+
+    // Mock WorkflowDiffEngine constructor
+    vi.mocked(WorkflowDiffEngine).mockImplementation(() => mockDiffEngine);
+
+    // Set up default environment
+    process.env.DEBUG_MCP = 'false';
+  });
+
+  describe('handleUpdatePartialWorkflow', () => {
+    it('should apply diff operations successfully', async () => {
+      const testWorkflow = createTestWorkflow();
+      const updatedWorkflow = {
+        ...testWorkflow,
+        nodes: [
+          ...testWorkflow.nodes,
+          {
+            id: 'node3',
+            name: 'New Node',
+            type: 'n8n-nodes-base.set',
+            typeVersion: 1,
+            position: [500, 100],
+            parameters: {},
+          },
+        ],
+        connections: {
+          ...testWorkflow.connections,
+          'HTTP Request': {
+            main: [[{ node: 'New Node', type: 'main', index: 0 }]],
+          },
+        },
+      };
+
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'addNode',
+            node: {
+              id: 'node3',
+              name: 'New Node',
+              type: 'n8n-nodes-base.set',
+              typeVersion: 1,
+              position: [500, 100],
+              parameters: {},
+            },
+          },
+        ],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: updatedWorkflow,
+        operationsApplied: 1,
+        message: 'Successfully applied 1 operation',
+        errors: [],
+        applied: [0],
+        failed: [],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result).toEqual({
+        success: true,
+        saved: true,
+        data: {
+          id: 'test-workflow-id',
+          name: 'Test Workflow',
+          active: true,
+          nodeCount: 3,
+          operationsApplied: 1,
+        },
+        message: 'Workflow "Test Workflow" updated successfully. Applied 1 operations. Use n8n_get_workflow with mode \'structure\' to verify current state.',
+        details: {
+          applied: [0],
+          failed: [],
+          errors: [],
+          warnings: undefined,
+        },
+      });
+
+      expect(mockApiClient.getWorkflow).toHaveBeenCalledWith('test-workflow-id');
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, diffRequest);
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledWith('test-workflow-id', updatedWorkflow, expect.objectContaining({ onWarning: expect.any(Function) }));
+    });
+
+    it('passes a setNodeGroups payload through to the engine', async () => {
+      // The operations schema is a closed z.object: a field it does not declare is stripped
+      // silently, and a setNodeGroups op arriving empty would read as "ungroup everything".
+      const testWorkflow = createTestWorkflow();
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        authoredGroupNames: ['Deliver'],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue(testWorkflow);
+
+      await handleUpdatePartialWorkflow(
+        {
+          id: 'test-workflow-id',
+          operations: [{ type: 'setNodeGroups', nodeGroups: [{ name: 'Deliver', nodeNames: ['Slack'] }] }],
+        },
+        mockRepository
+      );
+
+      const [, request] = mockDiffEngine.applyDiff.mock.calls[0];
+      expect(request.operations[0].nodeGroups).toEqual([{ name: 'Deliver', nodeNames: ['Slack'] }]);
+    });
+
+    it('passes a setNodeGroups payload through when the transport stringified it', async () => {
+      const testWorkflow = createTestWorkflow();
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({ success: true, workflow: testWorkflow, operationsApplied: 1 });
+      mockApiClient.updateWorkflow.mockResolvedValue(testWorkflow);
+
+      await handleUpdatePartialWorkflow(
+        {
+          id: 'test-workflow-id',
+          operations: [{ type: 'setNodeGroups', nodeGroups: '[{"name":"Deliver","nodeNames":["Slack"]}]' }],
+        },
+        mockRepository
+      );
+
+      const [, request] = mockDiffEngine.applyDiff.mock.calls[0];
+      expect(request.operations[0].nodeGroups).toEqual([{ name: 'Deliver', nodeNames: ['Slack'] }]);
+    });
+
+    it('tells the client which groups were authored, so a rejection is not swallowed', async () => {
+      const testWorkflow = createTestWorkflow();
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        authoredGroupNames: ['Deliver'],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue(testWorkflow);
+
+      await handleUpdatePartialWorkflow(
+        {
+          id: 'test-workflow-id',
+          operations: [{ type: 'setNodeGroups', nodeGroups: [{ name: 'Deliver', nodeNames: ['Slack'] }] }],
+        },
+        mockRepository
+      );
+
+      const [, , options] = mockApiClient.updateWorkflow.mock.calls[0];
+      expect(options.authoredGroups).toEqual(new Set(['Deliver']));
+    });
+
+    it('reports canvas-group adjustments made while saving', async () => {
+      const testWorkflow = createTestWorkflow();
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        applied: [0],
+        failed: [],
+      });
+      mockApiClient.updateWorkflow.mockImplementation(async (_id: string, _wf: unknown, options: any) => {
+        options?.onWarning?.('n8n rejected node group "Broken", so it was ungrouped to save the workflow');
+        return testWorkflow;
+      });
+
+      const result = await handleUpdatePartialWorkflow(
+        { id: 'test-workflow-id', operations: [{ type: 'removeNode', nodeId: 'slack-node' }] },
+        mockRepository
+      );
+
+      expect(result.details?.warnings).toEqual([
+        { operation: -1, message: 'n8n rejected node group "Broken", so it was ungrouped to save the workflow' },
+      ]);
+    });
+
+    it('resolves without waiting for stalled telemetry after Set v3.4 addNode + addConnection (#944)', async () => {
+      vi.useFakeTimers();
+
+      try {
+        const testWorkflow = createTestWorkflow();
+        const setNode = {
+          id: 'set-node',
+          name: 'Set',
+          type: 'n8n-nodes-base.set',
+          typeVersion: 3.4,
+          position: [500, 100],
+          parameters: {
+            assignments: {
+              assignments: [
+                {
+                  id: 'assignment-1',
+                  name: 'status',
+                  value: 'ready',
+                  type: 'string',
+                },
+              ],
+            },
+            options: {},
+          },
+        };
+        const diffRequest = {
+          id: 'test-workflow-id',
+          operations: [
+            {
+              type: 'addNode',
+              node: setNode,
+            },
+            {
+              type: 'addConnection',
+              source: 'HTTP Request',
+              target: 'Set',
+            },
+          ],
+        };
+        const updatedWorkflow = {
+          ...testWorkflow,
+          nodes: [...testWorkflow.nodes, setNode],
+          connections: {
+            ...testWorkflow.connections,
+            'HTTP Request': {
+              main: [[{ node: 'Set', type: 'main', index: 0 }]],
+            },
+          },
+        };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 2,
+          message: 'Successfully applied 2 operations',
+          errors: [],
+          applied: [0, 1],
+          failed: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        let signalTelemetryStarted!: () => void;
+        const telemetryStarted = new Promise<void>((resolve) => {
+          signalTelemetryStarted = resolve;
+        });
+        telemetryMocks.trackWorkflowMutation.mockImplementation(() => {
+          signalTelemetryStarted();
+          return new Promise<void>(() => {});
+        });
+
+        const handlerPromise = handleUpdatePartialWorkflow(diffRequest, mockRepository);
+        const outcomePromise = Promise.race([
+          handlerPromise.then((result) => ({ state: 'resolved' as const, result })),
+          new Promise<{ state: 'timed-out' }>((resolve) => {
+            setTimeout(() => resolve({ state: 'timed-out' }), 1_000);
+          }),
+        ]);
+
+        await telemetryStarted;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        await expect(outcomePromise).resolves.toMatchObject({
+          state: 'resolved',
+          result: {
+            success: true,
+            saved: true,
+            data: {
+              operationsApplied: 2,
+            },
+          },
+        });
+        expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalledWith(
+          expect.objectContaining({
+            toolName: 'n8n_update_partial_workflow',
+            operations: diffRequest.operations,
+            mutationSuccess: true,
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resolves API failures without waiting for stalled mutation telemetry', async () => {
+      vi.useFakeTimers();
+
+      try {
+        const testWorkflow = createTestWorkflow();
+        const diffRequest = {
+          id: 'test-workflow-id',
+          operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+        };
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: { ...testWorkflow, name: 'Renamed Workflow' },
+          operationsApplied: 1,
+          message: 'Successfully applied 1 operation',
+          errors: [],
+          applied: [0],
+          failed: [],
+        });
+        mockApiClient.updateWorkflow.mockRejectedValue(
+          new N8nValidationError('Update rejected'),
+        );
+
+        let signalTelemetryStarted!: () => void;
+        const telemetryStarted = new Promise<void>((resolve) => {
+          signalTelemetryStarted = resolve;
+        });
+        telemetryMocks.trackWorkflowMutation.mockImplementation(() => {
+          signalTelemetryStarted();
+          return new Promise<void>(() => {});
+        });
+
+        const handlerPromise = handleUpdatePartialWorkflow(diffRequest, mockRepository);
+        const outcomePromise = Promise.race([
+          handlerPromise.then((result) => ({ state: 'resolved' as const, result })),
+          new Promise<{ state: 'timed-out' }>((resolve) => {
+            setTimeout(() => resolve({ state: 'timed-out' }), 1_000);
+          }),
+        ]);
+
+        await telemetryStarted;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        await expect(outcomePromise).resolves.toMatchObject({
+          state: 'resolved',
+          result: {
+            success: false,
+            code: 'VALIDATION_ERROR',
+          },
+        });
+        expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalledWith(
+          expect.objectContaining({
+            toolName: 'n8n_update_partial_workflow',
+            mutationSuccess: false,
+            mutationError: 'Update rejected',
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('normalizes HTTP MCP serialized addNode payloads before applying the diff (#814)', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'addNode',
+            node: {
+              id: 'node3',
+              name: 'Set Node',
+              type: 'n8n-nodes-base.set',
+              typeVersion: '3',
+              position: { '0': 500, '1': 100 },
+              parameters: '{"values":{"0":{"name":"message","value":"Hello"}}}',
+            },
+          },
+        ],
+        validateOnly: true,
+      };
+      const normalizedRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'addNode',
+            node: {
+              id: 'node3',
+              name: 'Set Node',
+              type: 'n8n-nodes-base.set',
+              typeVersion: 3,
+              position: [500, 100],
+              parameters: {
+                values: [{ name: 'message', value: 'Hello' }],
+              },
+            },
+          },
+        ],
+        validateOnly: true,
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: {
+          ...testWorkflow,
+          nodes: [...testWorkflow.nodes, normalizedRequest.operations[0].node],
+        },
+        operationsApplied: 1,
+        message: 'Validation successful',
+        errors: [],
+        warnings: [],
+      });
+
+      await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, normalizedRequest);
+    });
+
+    it('normalizes an operations array mangled into a dense-index record (#814)', async () => {
+      const testWorkflow = createTestWorkflow();
+      const operation = {
+        type: 'updateName',
+        name: 'Renamed Workflow',
+      };
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: { '0': operation },
+        validateOnly: true,
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: { ...testWorkflow, name: 'Renamed Workflow' },
+        operationsApplied: 1,
+        message: 'Validation successful',
+        errors: [],
+        warnings: [],
+      });
+
+      await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, {
+        id: 'test-workflow-id',
+        operations: [operation],
+        validateOnly: true,
+      });
+    });
+
+    it('normalizes mangled nested arrays inside updateNode updates (#814)', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'updateNode',
+            nodeName: 'HTTP Request',
+            updates: {
+              'parameters.assignments.assignments': {
+                '0': { id: '1', name: 'message', value: 'Hello', type: 'string' },
+              },
+            },
+          },
+        ],
+        validateOnly: true,
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        message: 'Validation successful',
+        errors: [],
+        warnings: [],
+      });
+
+      await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'updateNode',
+            nodeName: 'HTTP Request',
+            updates: {
+              'parameters.assignments.assignments': [
+                { id: '1', name: 'message', value: 'Hello', type: 'string' },
+              ],
+            },
+          },
+        ],
+        validateOnly: true,
+      });
+    });
+
+    it('normalizes a patches array mangled into a dense-index record (#814)', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'patchNodeField',
+            nodeName: 'HTTP Request',
+            fieldPath: 'parameters.url',
+            patches: { '0': { find: 'api.test.com', replace: 'api.example.com' } },
+          },
+        ],
+        validateOnly: true,
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        message: 'Validation successful',
+        errors: [],
+        warnings: [],
+      });
+
+      await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'patchNodeField',
+            nodeName: 'HTTP Request',
+            fieldPath: 'parameters.url',
+            patches: [{ find: 'api.test.com', replace: 'api.example.com' }],
+          },
+        ],
+        validateOnly: true,
+      });
+    });
+
+    it('normalizes mangled connection arrays in replaceConnections (#814)', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'replaceConnections',
+            connections: {
+              Start: {
+                main: { '0': { '0': { node: 'HTTP Request', type: 'main', index: 0 } } },
+              },
+            },
+          },
+        ],
+        validateOnly: true,
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        message: 'Validation successful',
+        errors: [],
+        warnings: [],
+      });
+
+      await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'replaceConnections',
+            connections: {
+              Start: {
+                main: [[{ node: 'HTTP Request', type: 'main', index: 0 }]],
+              },
+            },
+          },
+        ],
+        validateOnly: true,
+      });
+    });
+
+    it('should handle validation-only mode', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'updateNode',
+            nodeId: 'node2',
+            updates: { name: 'Updated HTTP Request' },
+          },
+        ],
+        validateOnly: true,
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        message: 'Validation successful',
+        errors: [],
+        warnings: []
+      });
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result).toEqual({
+        success: true,
+        message: 'Validation successful',
+        data: {
+          valid: true,
+          operationsToApply: 1,
+        },
+        details: {
+          warnings: []
+        }
+      });
+
+      expect(mockApiClient.updateWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('reports valid=false in validateOnly when post-diff structure fails (#744)', async () => {
+      // Pre-fix the validateOnly early-return ran before validateWorkflowStructure
+      // and always returned valid: true, even when validateOnly: false would have failed.
+      // Now both paths produce the same structural verdict.
+      const brokenWorkflow = createTestWorkflow({
+        nodes: [
+          {
+            id: 'orphan-1',
+            name: 'Orphan',
+            type: 'n8n-nodes-base.set',
+            typeVersion: 1,
+            position: [100, 100],
+            parameters: {},
+          },
+        ],
+        // Connection points to a node that does not exist — validateWorkflowStructure
+        // flags this as a structural error.
+        connections: {
+          'Orphan': {
+            main: [[{ node: 'NonExistent', type: 'main', index: 0 }]],
+          },
+        },
+      });
+
+      mockApiClient.getWorkflow.mockResolvedValue(createTestWorkflow());
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: brokenWorkflow,
+        operationsApplied: 1,
+        message: 'Operations applied',
+        errors: [],
+        warnings: [],
+      });
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-workflow-id',
+        operations: [{ type: 'updateName', name: 'Anything' }],
+        validateOnly: true,
+      }, mockRepository);
+
+      expect(result.success).toBe(true);
+      const data = result.data as { valid: boolean; structureErrors?: string[] };
+      expect(data.valid).toBe(false);
+      expect(data.structureErrors).toBeDefined();
+      expect(mockApiClient.updateWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('should handle multiple operations', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'updateNode',
+            nodeId: 'node1',
+            updates: { name: 'Updated Start' },
+          },
+          {
+            type: 'addNode',
+            node: {
+              id: 'node3',
+              name: 'Set Node',
+              type: 'n8n-nodes-base.set',
+              typeVersion: 1,
+              position: [500, 100],
+              parameters: {},
+            },
+          },
+          {
+            type: 'addConnection',
+            source: 'node2',
+            target: 'node3',
+            sourceOutput: 'main',
+            targetInput: 'main',
+          },
+        ],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: {
+          ...testWorkflow,
+          nodes: [
+            { ...testWorkflow.nodes[0], name: 'Updated Start' },
+            testWorkflow.nodes[1],
+            {
+              id: 'node3',
+              name: 'Set Node',
+              type: 'n8n-nodes-base.set',
+              typeVersion: 1,
+              position: [500, 100],
+              parameters: {},
+            }
+          ],
+          connections: {
+            'Updated Start': testWorkflow.connections['Start'],
+            'HTTP Request': {
+              main: [[{ node: 'Set Node', type: 'main', index: 0 }]],
+            },
+          },
+        },
+        operationsApplied: 3,
+        message: 'Successfully applied 3 operations',
+        errors: [],
+        applied: [0, 1, 2],
+        failed: [],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue({ ...testWorkflow });
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Applied 3 operations');
+    });
+
+    it('should handle diff application failures', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'updateNode',
+            nodeId: 'non-existent-node',
+            updates: { name: 'Updated' },
+          },
+        ],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: false,
+        workflow: null,
+        operationsApplied: 0,
+        message: 'Failed to apply operations',
+        errors: ['Node "non-existent-node" not found'],
+        applied: [],
+        failed: [0],
+      });
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        saved: false,
+        operationsApplied: 0,
+        error: 'Failed to apply diff operations',
+        details: {
+          errors: ['Node "non-existent-node" not found'],
+          warnings: undefined,
+          applied: [],
+          failed: [0],
+        },
+      });
+
+      expect(mockApiClient.updateWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('should handle API not configured error', async () => {
+      vi.mocked(getN8nApiClient).mockReturnValue(null);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [],
+      }, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'n8n API not configured. Please set N8N_API_URL and N8N_API_KEY environment variables.',
+      });
+    });
+
+    it('should handle workflow not found error', async () => {
+      const notFoundError = new N8nNotFoundError('Workflow', 'non-existent');
+      mockApiClient.getWorkflow.mockRejectedValue(notFoundError);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'non-existent',
+        operations: [],
+      }, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Workflow with ID non-existent not found',
+        code: 'NOT_FOUND',
+      });
+    });
+
+    it('should roll back to prior state when n8n PUT fails after persisting body', async () => {
+      // n8n's PUT can fail AFTER persisting the body (e.g. unsupported
+      // typeVersion trips the activation step). The handler GETs the server
+      // state, sees versionId moved past the snapshot, and re-PUTs the
+      // prior snapshot to restore state.
+      const before = createTestWorkflow({ versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ versionId: 'v2' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+
+      // 1st GET = pre-mutation snapshot; 2nd GET = post-failure state (persisted, new versionId).
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      // First call (mutation) rejects; second call (rollback) resolves.
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockResolvedValueOnce(before);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      // updateWorkflow called twice: once with mutated body, once with snapshot.
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.updateWorkflow).toHaveBeenNthCalledWith(2, 'test-id', before, expect.objectContaining({ onWarning: expect.any(Function) }));
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Invalid request: Invalid workflow structure (workflow restored to prior state)',
+        code: 'VALIDATION_ERROR',
+        details: {
+          field: 'connections',
+          message: 'Invalid connection configuration',
+          rollbackPerformed: true,
+          priorVersionId: 'v1',
+        },
+      });
+    });
+
+    it('should report a canvas group the rollback had to drop', async () => {
+      // A rollback can only succeed by ungrouping a group the server no longer accepts. That is a
+      // real change to the restored workflow, so it must survive the error path.
+      const before = createTestWorkflow({ versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ versionId: 'v2' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {});
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockImplementationOnce(async (_id: string, _wf: unknown, options: any) => {
+          options?.onWarning?.('n8n rejected node group "Stale", so it was ungrouped to save the workflow');
+          return before;
+        });
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'removeNode', nodeId: 'node1' }],
+      }, mockRepository);
+
+      expect(result.success).toBe(false);
+      // Same shape as the success path, so a client reads details.warnings without branching.
+      expect(result.details?.warnings).toEqual([
+        { operation: -1, message: 'n8n rejected node group "Stale", so it was ungrouped to save the workflow' },
+      ]);
+    });
+
+    it('should NOT roll back when n8n rejected the PUT before persisting', async () => {
+      // If versionId is unchanged after the failed PUT, the body never
+      // persisted. Rolling back would be a wasted PUT and the
+      // "(restored to prior state)" suffix would mislead the caller.
+      const before = createTestWorkflow({ versionId: 'v1' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+
+      // Both GETs return the same versionId — no persistence happened.
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(before);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockRejectedValueOnce(validationError);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      // Only the original PUT — no rollback PUT.
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        success: false,
+        error: 'Invalid request: Invalid workflow structure',
+        code: 'VALIDATION_ERROR',
+        details: {
+          field: 'connections',
+          message: 'Invalid connection configuration',
+          rollbackPerformed: false,
+        },
+      });
+      // Regression check: this non-PUBLISH_FORBIDDEN failure's details also carry
+      // `rollbackPerformed: false` (pre-save rejection), but that must not be mistaken
+      // for the PUBLISH_FORBIDDEN "unconfirmed" state and drop workflowAfter — nothing
+      // persisted here, so workflowBefore remains accurate and MutationTracker still
+      // gets a workflowAfter to validate against.
+      await vi.waitFor(() => expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalled());
+      expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowAfter: before }),
+      );
+    });
+
+    it('should detect persistence via versionCounter when versionId is unavailable', async () => {
+      // Older n8n responses may omit versionId but still expose versionCounter
+      // (n8n 1.118.1+). Rollback must still trigger on that signal alone, and
+      // priorVersionId should be omitted from details since the snapshot has
+      // no versionId to surface.
+      const before = createTestWorkflow({ versionCounter: 5 });
+      const afterPersist = createTestWorkflow({ versionCounter: 6 });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockResolvedValueOnce(before);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.error).toContain('(workflow restored to prior state)');
+      expect(result.details).toMatchObject({ rollbackPerformed: true });
+      // No versionId on the snapshot → no priorVersionId in details.
+      expect((result.details as Record<string, unknown>).priorVersionId).toBeUndefined();
+    });
+
+    it('should attempt rollback when version fields are unavailable on both sides', async () => {
+      // Some n8n versions may strip versionId / versionCounter / updatedAt
+      // entirely from the GET response. With no comparable signal we cannot
+      // determine whether the body persisted, so rollback must fire as a
+      // safety net — the silent-corruption bug class is far worse than a
+      // redundant PUT.
+      const base = createTestWorkflow();
+      const { versionId, versionCounter, updatedAt, createdAt, ...rest } = base as any;
+      const noVersionFields = rest;
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(noVersionFields)
+        .mockResolvedValueOnce(noVersionFields);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: noVersionFields,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockResolvedValueOnce(noVersionFields);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.error).toContain('(workflow restored to prior state)');
+      expect(result.details).toMatchObject({ rollbackPerformed: true });
+    });
+
+    it('should attempt rollback when post-failure GET itself fails', async () => {
+      // If we can't determine server state, fall back to best-effort
+      // rollback so we don't lose the safety net for the typeVersion
+      // class of bug reported in #770.
+      const before = createTestWorkflow({ versionId: 'v1' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+
+      // 1st GET succeeds (snapshot); 2nd GET (post-failure check) rejects.
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockRejectedValueOnce(new N8nServerError('n8n unreachable', 503));
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockResolvedValueOnce(before);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('(workflow restored to prior state)');
+      expect(result.details).toMatchObject({ rollbackPerformed: true, priorVersionId: 'v1' });
+    });
+
+    it('should report rollback failure when both PUTs fail', async () => {
+      // If the rollback PUT also fails, surface BOTH errors so the caller
+      // knows the workflow may be in a broken state. priorVersionId points
+      // at the snapshot to recover via n8n_workflow_versions.
+      const before = createTestWorkflow({ versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ versionId: 'v2' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+      const rollbackFailure = new N8nServerError('n8n unreachable', 503);
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        // The post-rollback verification read fails too, so the outcome stays inconclusive and the
+        // warning stands. Explicit rather than relying on an unconfigured mock.
+        .mockRejectedValueOnce(new N8nServerError('n8n unreachable', 503));
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockRejectedValueOnce(rollbackFailure);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(false);
+      expect(result.code).toBe('VALIDATION_ERROR');
+      expect(result.error).toContain('Invalid request: Invalid workflow structure');
+      expect(result.error).toContain('rollback also failed');
+      expect(result.error).toContain('n8n_workflow_versions');
+      expect(result.details).toMatchObject({
+        field: 'connections',
+        message: 'Invalid connection configuration',
+        rollbackPerformed: false,
+        rollbackError: 'n8n unreachable',
+        priorVersionId: 'v1',
+      });
+    });
+
+    it('should treat a rollback as performed when its PUT errored but the content was restored', async () => {
+      // n8n's public API commits workflow content before it checks publish permission, so a
+      // rollback PUT can persist and then throw. Version identity cannot settle it: the restored
+      // workflow necessarily carries a new versionId, so the writable content is what must be
+      // compared. Reporting a broken workflow here invites a riskier recovery than doing nothing.
+      // Names differ so the fixture actually models a reverted change rather than passing on
+      // workflows that were identical all along.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v2' });
+      const afterRollback = createTestWorkflow({ name: 'Original Workflow', versionId: 'v3' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+      const publishRefused = new N8nNotFoundError(
+        'You do not have permission to activate this workflow. Ask the owner to share it with you.',
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(afterRollback);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockRejectedValueOnce(publishRefused);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('workflow restored to prior state');
+      expect(result.error).not.toContain('rollback also failed');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: true,
+        rollbackVerifiedAfterError: true,
+      });
+      expect(result.details).not.toHaveProperty('rollbackError');
+    });
+
+    it('should report PUBLISH_FORBIDDEN with a non-contradictory message when n8n refuses to publish on save', async () => {
+      // n8n 2.39+: PUT on a published workflow answers 403 with { message, reason, versionId }
+      // when the caller may edit but not publish. n8n has already saved the change as a draft.
+      // The rollback PUT hits the exact same 403 (the check is scope/permission-based, not
+      // content-based), so it also persists-then-throws; verify via GET like any other rollback.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+      const afterRollback = createTestWorkflow({ name: 'Original Workflow', versionId: 'draft-2' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+      const rollbackPublishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-2' },
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(afterRollback);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockRejectedValueOnce(rollbackPublishForbidden);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(false);
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).not.toContain('saved as a draft');
+      expect(result.error).toContain('published version is unchanged');
+      expect(result.error).toContain('current draft matches the content from before this update');
+      expect(result.details).toMatchObject({
+        reason: 'insufficient_api_key_scope',
+        supersededDraftVersionId: 'draft-1',
+        restoredDraftVersionId: 'draft-2',
+        priorVersionId: 'v1',
+        rollbackPerformed: true,
+        rollbackVerifiedAfterError: true,
+      });
+    });
+
+    it('reports a clean rollback and its versionId when the rollback PUT succeeds directly (200)', async () => {
+      // A rollback PUT that returns 200 (no throw) is at least as clean a restore as one that
+      // 403s and gets verified via GET — rollbackVerifiedAfterError only distinguishes HOW the
+      // rollback was confirmed, not whether it counts as clean. The reported restoredDraftVersionId
+      // comes straight off the rollback PUT's own response in this path.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+      const restored = createTestWorkflow({ name: 'Original Workflow', versionId: 'draft-2' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockResolvedValueOnce(restored);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('current draft matches the content from before this update');
+      expect(result.error).not.toContain('rollback did not complete');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: true,
+        restoredDraftVersionId: 'draft-2',
+        supersededDraftVersionId: 'draft-1',
+      });
+      // A rollback PUT that returns 200 has nothing to "verify after error" — the field
+      // is only meaningful (and only emitted) when the rollback PUT itself errored.
+      expect(result.details).not.toHaveProperty('rollbackVerifiedAfterError');
+      // Telemetry: a confirmed rollback means the server holds the content from before
+      // this update, not the attempted change. The tracking call is fire-and-forget behind
+      // a dynamic import, so wait for it rather than asserting immediately.
+      await vi.waitFor(() => expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalled());
+      expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowAfter: expect.objectContaining({ name: 'Original Workflow' }) }),
+      );
+    });
+
+    it('reports the draft as unpublished, with no restoredDraftVersionId, when the rollback fails and the change is still live', async () => {
+      // The rollback PUT can fail for reasons unrelated to publish permission (e.g. a
+      // structural 400). When the verification GET shows the failed change is still there
+      // (not restored), the response must not claim a clean rollback or invent a versionId.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+      const afterFailedRollback = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+      const rollbackRejection = new N8nValidationError('Bad request', { field: 'connections' });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(afterFailedRollback);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockRejectedValueOnce(rollbackRejection);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('remains as an unpublished draft');
+      expect(result.error).toContain('rollback did not complete');
+      expect(result.error).toContain('n8n_workflow_versions');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: false,
+        draftVersionId: 'draft-1',
+        changeRetained: true,
+      });
+      expect(result.details).not.toHaveProperty('supersededDraftVersionId');
+      expect(result.details).not.toHaveProperty('attemptedDraftVersionId');
+      expect(result.details).not.toHaveProperty('observedDraftVersionId');
+      expect(result.details).not.toHaveProperty('restoredDraftVersionId');
+      // The rollback PUT here never even errored — it flat-out failed with a validation
+      // error and no "verified after error" reconciliation ever ran.
+      expect(result.details).not.toHaveProperty('rollbackVerifiedAfterError');
+      // Telemetry: the attempted change is confirmed still there (changeRetained), so
+      // workflowAfter should be the attempted content, not workflowBefore.
+      await vi.waitFor(() => expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalled());
+      expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowAfter: expect.objectContaining({ name: 'Renamed Workflow' }) }),
+      );
+    });
+
+    it('reports the rollback as unconfirmed when the rollback PUT fails and the verification GET also fails', async () => {
+      // Unlike the "still live" case above (verification GET succeeds and shows the change is
+      // still there), here the verification GET itself throws — the handler genuinely does not
+      // know whether the draft holds the attempted change or was restored, and must say so
+      // rather than defaulting to either "rolled back" or "did not complete".
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+      const rollbackRejection = new N8nValidationError('Bad request', { field: 'connections' });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockRejectedValueOnce(new Error('GET failed')); // verification GET also fails
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockRejectedValueOnce(rollbackRejection);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('could not be confirmed');
+      expect(result.error).toContain('n8n_workflow_versions');
+      expect(result.error).not.toContain('rolled back, so the current draft matches');
+      expect(result.error).not.toContain('rollback did not complete');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: false,
+        // Names the draft the first PUT reported, which the rollback attempt may have
+        // superseded — NOT `draftVersionId`, which would wrongly claim it's still current.
+        attemptedDraftVersionId: 'draft-1',
+      });
+      expect(result.details).not.toHaveProperty('draftVersionId');
+      expect(result.details).not.toHaveProperty('supersededDraftVersionId');
+      expect(result.details).not.toHaveProperty('restoredDraftVersionId');
+      expect(result.details).not.toHaveProperty('rollbackVerifiedAfterError');
+      // Telemetry: the outcome is unconfirmed, so workflowAfter falls back to
+      // workflowBefore (the best known content) rather than being omitted —
+      // MutationTracker rejects an event with no workflowAfter at all.
+      await vi.waitFor(() => expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalled());
+      const [telemetryArgs] = telemetryMocks.trackWorkflowMutation.mock.calls.at(-1)!;
+      expect(telemetryArgs).toHaveProperty('workflowAfter');
+      expect(telemetryArgs.workflowAfter).toEqual(telemetryArgs.workflowBefore);
+    });
+
+    it('reports an incomplete restore when the verification GET matches neither the prior nor the attempted content', async () => {
+      // The rollback PUT errored, and the readback succeeded, but it holds a THIRD content —
+      // neither workflowBefore (restored) nor the attempted change (still live). This is
+      // distinct from both other rollback-failed states: unlike the "still live" case, the
+      // draft did change; unlike "unconfirmed", we DID read it, we just don't recognize it.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+      const partiallyRestored = createTestWorkflow({ name: 'Partially Restored Workflow', versionId: 'draft-3' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+      const rollbackRejection = new N8nValidationError('Bad request', { field: 'connections' });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(partiallyRestored);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockRejectedValueOnce(rollbackRejection);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('restore did not complete');
+      expect(result.error).toContain('neither the attempted change nor the content from before this update');
+      expect(result.error).toContain('n8n_workflow_versions');
+      expect(result.error).not.toContain('rolled back, so the current draft matches');
+      expect(result.error).not.toContain('could not be confirmed');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: false,
+        observedDraftVersionId: 'draft-3',
+      });
+      expect(result.details).not.toHaveProperty('draftVersionId');
+      expect(result.details).not.toHaveProperty('attemptedDraftVersionId');
+      expect(result.details).not.toHaveProperty('supersededDraftVersionId');
+      expect(result.details).not.toHaveProperty('restoredDraftVersionId');
+      expect(result.details).not.toHaveProperty('changeRetained');
+      // Telemetry: the verification GET succeeded here, so it IS the real persisted
+      // state — workflowAfter should be that observed content, not workflowBefore.
+      await vi.waitFor(() => expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalled());
+      expect(telemetryMocks.trackWorkflowMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowAfter: expect.objectContaining({ name: 'Partially Restored Workflow' }) }),
+      );
+    });
+
+    it('reports that what persisted could not be confirmed when both the version and content are unchanged after the failed PUT', async () => {
+      // versionState === 'same' AND the content also matches workflowBefore: the two most
+      // reliable signals agree that nothing persisted, but n8n's 403 body still names a draft
+      // it says it saved. State the contradiction rather than resolving it either way.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(before); // GET after failure: same version AND same content
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockRejectedValueOnce(publishForbidden);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(1); // no rollback PUT attempted
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('n8n reports it saved draft draft-1');
+      expect(result.error).toContain("workflow's version is unchanged");
+      expect(result.error).toContain('could not be confirmed');
+      expect(result.error).toContain('published version is unchanged');
+      expect(result.details).toMatchObject({
+        reason: 'insufficient_api_key_scope',
+        draftVersionId: 'draft-1',
+        rollbackPerformed: false,
+      });
+      expect(result.details).not.toHaveProperty('supersededDraftVersionId');
+      expect(result.details).not.toHaveProperty('restoredDraftVersionId');
+    });
+
+    it('flags folder-move uncertainty instead of implying nothing persisted, when the request moved the workflow (#1124)', async () => {
+      // sameWritableContent cannot see a folder move: workflowBefore comes from a GET, and
+      // n8n never returns parentFolderId (write-only). Even with version AND content both
+      // unchanged, a folder move in this payload could have persisted regardless.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1', parentFolderId: 'folder-2' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(before); // GET after failure: same version AND same content
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockRejectedValueOnce(publishForbidden);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'moveToFolder', parentFolderId: 'folder-2' }],
+      }, mockRepository);
+
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(1); // no rollback PUT attempted
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('folder move');
+      expect(result.error).toContain('may have persisted');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: false,
+        draftVersionId: 'draft-1',
+        folderMoveMayHavePersisted: true,
+      });
+    });
+
+    it('flags folder-move uncertainty when the restore is incomplete (#1124)', async () => {
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1', parentFolderId: 'folder-2' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+      const partiallyRestored = createTestWorkflow({ name: 'Partially Restored Workflow', versionId: 'draft-3' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+      const rollbackRejection = new N8nValidationError('Bad request', { field: 'connections' });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(partiallyRestored);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockRejectedValueOnce(rollbackRejection);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }, { type: 'moveToFolder', parentFolderId: 'folder-2' }],
+      }, mockRepository);
+
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.details).toMatchObject({ observedDraftVersionId: 'draft-3', folderMoveMayHavePersisted: true });
+      expect(result.error).toContain('restore did not complete');
+      expect(result.error).toContain('folder move');
+    });
+
+    it('flags folder-move uncertainty on the unconfirmed (verification-GET-failed) outcome (#1124)', async () => {
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1', parentFolderId: 'folder-2' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'draft-1' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+      const rollbackRejection = new N8nValidationError('Bad request', { field: 'connections' });
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockRejectedValueOnce(new Error('GET failed'));
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockRejectedValueOnce(rollbackRejection);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }, { type: 'moveToFolder', parentFolderId: 'folder-2' }],
+      }, mockRepository);
+
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.details).toMatchObject({ attemptedDraftVersionId: 'draft-1', folderMoveMayHavePersisted: true });
+      expect(result.error).toContain('could not be confirmed');
+      expect(result.error).toContain('folder move');
+    });
+
+    it('attempts rollback when the version is unchanged but the content differs (n8n does not bump versionId for name/settings-only changes)', async () => {
+      // n8n 2.39 does not bump versionId for name/settings-only changes. A PUBLISH_FORBIDDEN
+      // 403 reporting the same versionId must not be trusted blindly — check content instead,
+      // and treat a mismatch as a persisted change requiring rollback.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      // Same versionId as `before`, but the content differs: exactly what n8n 2.39 does for a
+      // name-only change that persists without bumping versionId.
+      const afterPersistSameVersion = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const restored = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+
+      const publishForbidden = new N8nApiError(
+        "Your change was saved as a draft. It wasn't published because this API key does not have the workflow:activate scope.",
+        403,
+        'PUBLISH_FORBIDDEN',
+        { reason: 'insufficient_api_key_scope', versionId: 'draft-1' },
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersistSameVersion);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(publishForbidden)
+        .mockResolvedValueOnce(restored);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      // Two PUTs means the handler went through the rollback attempt rather than the
+      // "nothing persisted" shortcut, despite the unchanged versionId.
+      expect(mockApiClient.updateWorkflow).toHaveBeenCalledTimes(2);
+      expect(result.code).toBe('PUBLISH_FORBIDDEN');
+      expect(result.error).toContain('rolled back, so the current draft matches the content from before this update');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: true,
+        supersededDraftVersionId: 'draft-1',
+      });
+    });
+
+    it('should still report rollback failure when the content was not restored', async () => {
+      // The verification must not turn every rollback failure into a success: if the server still
+      // holds the attempted change, the warning has to stand.
+      const before = createTestWorkflow({ name: 'Original Workflow', versionId: 'v1' });
+      const attempted = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v1' });
+      const afterPersist = createTestWorkflow({ name: 'Renamed Workflow', versionId: 'v2' });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+      const rollbackFailure = new N8nServerError('n8n unreachable', 503);
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(afterPersist);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockRejectedValueOnce(rollbackFailure);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('rollback also failed');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: false,
+        rollbackError: 'n8n unreachable',
+      });
+      expect(result.details).not.toHaveProperty('rollbackVerifiedAfterError');
+    });
+
+    it('should verify a restored workflow that contains a webhook node', async () => {
+      // Guards a subtle trap: the update allowlist assigns a random webhookId to webhook nodes that
+      // lack one, and does so in place. Comparing the raw cleaned output would mutate both reads and
+      // give each a different id, so a webhook workflow would never compare equal to itself.
+      const webhookNode = {
+        id: 'hook1',
+        name: 'Webhook',
+        type: 'n8n-nodes-base.webhook',
+        typeVersion: 2,
+        position: [0, 0],
+        parameters: { path: 'incoming' },
+      };
+      const before = createTestWorkflow({
+        name: 'Original Workflow',
+        versionId: 'v1',
+        nodes: [webhookNode],
+        connections: {},
+      });
+      const attempted = createTestWorkflow({
+        name: 'Renamed Workflow',
+        versionId: 'v1',
+        nodes: [webhookNode],
+        connections: {},
+      });
+      const afterPersist = createTestWorkflow({
+        name: 'Renamed Workflow',
+        versionId: 'v2',
+        nodes: [webhookNode],
+        connections: {},
+      });
+      const afterRollback = createTestWorkflow({
+        name: 'Original Workflow',
+        versionId: 'v3',
+        nodes: [webhookNode],
+        connections: {},
+      });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+      const publishRefused = new N8nNotFoundError(
+        'You do not have permission to activate this workflow. Ask the owner to share it with you.',
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(afterRollback);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: attempted,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockRejectedValueOnce(publishRefused);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Renamed Workflow' }],
+      }, mockRepository);
+
+      expect(result.details).toMatchObject({
+        rollbackPerformed: true,
+        rollbackVerifiedAfterError: true,
+      });
+    });
+
+    it('should still report rollback failure when only a pre-existing webhookId differs', async () => {
+      // A webhookId the workflow already carried is real content, not a value the allowlist made up,
+      // so a change to one means the prior state was not restored. Only generated ids are ignored.
+      const hook = (webhookId: string) => ({
+        id: 'hook1',
+        name: 'Webhook',
+        type: 'n8n-nodes-base.webhook',
+        typeVersion: 2,
+        position: [0, 0],
+        parameters: { path: 'incoming' },
+        webhookId,
+      });
+      const before = createTestWorkflow({
+        name: 'Original Workflow',
+        versionId: 'v1',
+        nodes: [hook('stable-hook-id')],
+        connections: {},
+      });
+      const afterPersist = createTestWorkflow({
+        name: 'Original Workflow',
+        versionId: 'v2',
+        nodes: [hook('stable-hook-id')],
+        connections: {},
+      });
+      const afterRollback = createTestWorkflow({
+        name: 'Original Workflow',
+        versionId: 'v3',
+        nodes: [hook('replaced-hook-id')],
+        connections: {},
+      });
+      const validationError = new N8nValidationError('Invalid workflow structure', {
+        field: 'connections',
+        message: 'Invalid connection configuration',
+      });
+      const publishRefused = new N8nNotFoundError(
+        'You do not have permission to activate this workflow. Ask the owner to share it with you.',
+      );
+
+      mockApiClient.getWorkflow
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(afterPersist)
+        .mockResolvedValueOnce(afterRollback);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: before,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow
+        .mockRejectedValueOnce(validationError)
+        .mockRejectedValueOnce(publishRefused);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateName', name: 'Original Workflow' }],
+      }, mockRepository);
+
+      expect(result.error).toContain('rollback also failed');
+      expect(result.details).toMatchObject({
+        rollbackPerformed: false,
+      });
+    });
+
+    it('should handle input validation errors', async () => {
+      const invalidInput = {
+        id: 'test-id',
+        operations: [
+          {
+            // Missing required 'type' field
+            nodeId: 'node1',
+            updates: {},
+          },
+        ],
+      };
+
+      const result = await handleUpdatePartialWorkflow(invalidInput, mockRepository);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Invalid input');
+      expect(result.details).toHaveProperty('errors');
+      expect(result.details?.errors).toBeInstanceOf(Array);
+    });
+
+    it('should handle complex operation types', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'moveNode',
+            nodeId: 'node2',
+            position: [400, 200],
+          },
+          {
+            type: 'removeConnection',
+            source: 'node1',
+            target: 'node2',
+            sourceOutput: 'main',
+            targetInput: 'main',
+          },
+          {
+            type: 'updateSettings',
+            settings: {
+              executionOrder: 'v1',
+              timezone: 'America/New_York',
+            },
+          },
+          {
+            type: 'addTag',
+            tag: 'automated',
+          },
+        ],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: { ...testWorkflow, settings: { executionOrder: 'v1' } },
+        operationsApplied: 4,
+        message: 'Successfully applied 4 operations',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue({ ...testWorkflow });
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result.success).toBe(true);
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, diffRequest);
+    });
+
+    it('should handle debug logging when enabled', async () => {
+      process.env.DEBUG_MCP = 'true';
+      const testWorkflow = createTestWorkflow();
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 1,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue(testWorkflow);
+
+      await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [{ type: 'updateNode', nodeId: 'node1', updates: {} }],
+      }, mockRepository);
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        'Workflow diff request received',
+        expect.objectContaining({
+          argsType: 'object',
+          operationCount: 1,
+        })
+      );
+    });
+
+    it('should handle generic errors', async () => {
+      const genericError = new Error('Something went wrong');
+      mockApiClient.getWorkflow.mockRejectedValue(genericError);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [],
+      }, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Something went wrong',
+      });
+      expect(logger.error).toHaveBeenCalledWith('Failed to update partial workflow', genericError);
+    });
+
+    it('should handle authentication errors', async () => {
+      const authError = new N8nAuthenticationError('Invalid API key');
+      mockApiClient.getWorkflow.mockRejectedValue(authError);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [],
+      }, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Failed to authenticate with n8n. Please check your API key.',
+        code: 'AUTHENTICATION_ERROR',
+      });
+    });
+
+    it('should handle rate limit errors', async () => {
+      const rateLimitError = new N8nRateLimitError(60);
+      mockApiClient.getWorkflow.mockRejectedValue(rateLimitError);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [],
+      }, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Too many requests. Please wait a moment and try again.',
+        code: 'RATE_LIMIT_ERROR',
+      });
+    });
+
+    it('should handle server errors', async () => {
+      const serverError = new N8nServerError('Internal server error');
+      mockApiClient.getWorkflow.mockRejectedValue(serverError);
+
+      const result = await handleUpdatePartialWorkflow({
+        id: 'test-id',
+        operations: [],
+      }, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Internal server error',
+        code: 'SERVER_ERROR',
+      });
+    });
+
+    it('should validate operation structure', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          {
+            type: 'updateNode',
+            nodeId: 'node1',
+            nodeName: 'Start', // Both nodeId and nodeName provided
+            updates: { name: 'New Start' },
+            description: 'Update start node name',
+          },
+          {
+            type: 'addConnection',
+            source: 'node1',
+            target: 'node2',
+            sourceOutput: 'main',
+            targetInput: 'main',
+            sourceIndex: 0,
+            targetIndex: 0,
+          },
+        ],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 2,
+        message: 'Success',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue(testWorkflow);
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result.success).toBe(true);
+      expect(mockDiffEngine.applyDiff).toHaveBeenCalledWith(testWorkflow, diffRequest);
+    });
+
+    it('should handle empty operations array', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: true,
+        workflow: testWorkflow,
+        operationsApplied: 0,
+        message: 'No operations to apply',
+        errors: [],
+      });
+      mockApiClient.updateWorkflow.mockResolvedValue(testWorkflow);
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Applied 0 operations');
+    });
+
+    it('should handle partial diff application', async () => {
+      const testWorkflow = createTestWorkflow();
+      const diffRequest = {
+        id: 'test-workflow-id',
+        operations: [
+          { type: 'updateNode', nodeId: 'node1', updates: { name: 'Updated' } },
+          { type: 'updateNode', nodeId: 'invalid-node', updates: { name: 'Fail' } },
+          { type: 'addTag', tag: 'test' },
+        ],
+      };
+
+      mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+      mockDiffEngine.applyDiff.mockResolvedValue({
+        success: false,
+        workflow: null,
+        operationsApplied: 1,
+        message: 'Partially applied operations',
+        errors: ['Operation 2 failed: Node "invalid-node" not found'],
+      });
+
+      const result = await handleUpdatePartialWorkflow(diffRequest, mockRepository);
+
+      expect(result).toEqual({
+        success: false,
+        saved: false,
+        operationsApplied: 1,
+        error: 'Failed to apply diff operations',
+        details: {
+          errors: ['Operation 2 failed: Node "invalid-node" not found'],
+          warnings: undefined,
+          applied: undefined,
+          failed: undefined,
+        },
+      });
+    });
+
+    describe('Workflow Activation/Deactivation', () => {
+      it('should activate workflow after successful update', async () => {
+        const testWorkflow = createTestWorkflow({ active: false });
+        const updatedWorkflow = { ...testWorkflow, active: false };
+        const activatedWorkflow = { ...testWorkflow, active: true };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldActivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.activateWorkflow = vi.fn().mockResolvedValue(activatedWorkflow);
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'activateWorkflow' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(result.data).toEqual({
+          id: 'test-workflow-id',
+          name: 'Test Workflow',
+          active: true,
+          nodeCount: 2,
+          operationsApplied: 1,
+        });
+        expect(result.message).toContain('Workflow activated');
+        expect((result.data as any).active).toBe(true);
+        expect(mockApiClient.activateWorkflow).toHaveBeenCalledWith('test-workflow-id');
+      });
+
+      it('should deactivate workflow after successful update', async () => {
+        const testWorkflow = createTestWorkflow({ active: true });
+        const updatedWorkflow = { ...testWorkflow, active: true };
+        const deactivatedWorkflow = { ...testWorkflow, active: false };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldDeactivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.deactivateWorkflow = vi.fn().mockResolvedValue(deactivatedWorkflow);
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'deactivateWorkflow' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(result.data).toEqual({
+          id: 'test-workflow-id',
+          name: 'Test Workflow',
+          active: false,
+          nodeCount: 2,
+          operationsApplied: 1,
+        });
+        expect(result.message).toContain('Workflow deactivated');
+        expect((result.data as any).active).toBe(false);
+        expect(mockApiClient.deactivateWorkflow).toHaveBeenCalledWith('test-workflow-id');
+      });
+
+      it('should handle activation failure after successful update', async () => {
+        const testWorkflow = createTestWorkflow({ active: false });
+        const updatedWorkflow = { ...testWorkflow, active: false };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldActivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.activateWorkflow = vi.fn().mockRejectedValue(new Error('Activation failed: No trigger nodes'));
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'activateWorkflow' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Workflow updated successfully but activation failed');
+        expect(result.details).toEqual({
+          workflowUpdated: true,
+          activationError: 'Activation failed: No trigger nodes',
+        });
+      });
+
+      it('should handle deactivation failure after successful update', async () => {
+        const testWorkflow = createTestWorkflow({ active: true });
+        const updatedWorkflow = { ...testWorkflow, active: true };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldDeactivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.deactivateWorkflow = vi.fn().mockRejectedValue(new Error('Deactivation failed'));
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'deactivateWorkflow' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Workflow updated successfully but deactivation failed');
+        expect(result.details).toEqual({
+          workflowUpdated: true,
+          deactivationError: 'Deactivation failed',
+        });
+      });
+
+      it('should update workflow without activation when shouldActivate is false', async () => {
+        const testWorkflow = createTestWorkflow({ active: false });
+        const updatedWorkflow = { ...testWorkflow, active: false };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldActivate: false,
+          shouldDeactivate: false,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.activateWorkflow = vi.fn();
+        mockApiClient.deactivateWorkflow = vi.fn();
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'updateName', name: 'Updated' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(result.message).not.toContain('activated');
+        expect(result.message).not.toContain('deactivated');
+        expect(mockApiClient.activateWorkflow).not.toHaveBeenCalled();
+        expect(mockApiClient.deactivateWorkflow).not.toHaveBeenCalled();
+      });
+
+      it('should handle non-Error activation failures', async () => {
+        const testWorkflow = createTestWorkflow({ active: false });
+        const updatedWorkflow = { ...testWorkflow, active: false };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldActivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.activateWorkflow = vi.fn().mockRejectedValue('String error');
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'activateWorkflow' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Workflow updated successfully but activation failed');
+        expect(result.details).toEqual({
+          workflowUpdated: true,
+          activationError: 'Unknown error',
+        });
+      });
+
+      it('should handle non-Error deactivation failures', async () => {
+        const testWorkflow = createTestWorkflow({ active: true });
+        const updatedWorkflow = { ...testWorkflow, active: true };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          shouldDeactivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.deactivateWorkflow = vi.fn().mockRejectedValue({ code: 'UNKNOWN' });
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'deactivateWorkflow' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Workflow updated successfully but deactivation failed');
+        expect(result.details).toEqual({
+          workflowUpdated: true,
+          deactivationError: 'Unknown error',
+        });
+      });
+    });
+
+    describe('Tag Operations via Dedicated API', () => {
+      it('should create a new tag and associate it with the workflow', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          tagsToAdd: ['new-tag'],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.listTags.mockResolvedValue({ data: [] });
+        mockApiClient.createTag.mockResolvedValue({ id: 'tag-123', name: 'new-tag' });
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'addTag', tag: 'new-tag' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(mockApiClient.createTag).toHaveBeenCalledWith({ name: 'new-tag' });
+        expect(mockApiClient.updateWorkflowTags).toHaveBeenCalledWith('test-workflow-id', ['tag-123']);
+      });
+
+      it('should use existing tag ID when tag already exists', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          tagsToAdd: ['existing-tag'],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.listTags.mockResolvedValue({ data: [{ id: 'tag-456', name: 'existing-tag' }] });
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'addTag', tag: 'existing-tag' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(mockApiClient.createTag).not.toHaveBeenCalled();
+        expect(mockApiClient.updateWorkflowTags).toHaveBeenCalledWith('test-workflow-id', ['tag-456']);
+      });
+
+      it('should remove a tag from the workflow', async () => {
+        const testWorkflow = createTestWorkflow({
+          tags: [{ id: 'tag-789', name: 'old-tag' }],
+        });
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          tagsToRemove: ['old-tag'],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.listTags.mockResolvedValue({ data: [{ id: 'tag-789', name: 'old-tag' }] });
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'removeTag', tag: 'old-tag' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(mockApiClient.updateWorkflowTags).toHaveBeenCalledWith('test-workflow-id', []);
+      });
+
+      it('should produce warning on tag creation failure without failing the operation', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          tagsToAdd: ['fail-tag'],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.listTags.mockResolvedValue({ data: [] });
+        mockApiClient.createTag.mockRejectedValue(new Error('Tag creation failed'));
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'addTag', tag: 'fail-tag' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(result.saved).toBe(true);
+        // Tag creation failure should produce a warning, not block the update
+        const warnings = (result.details as any)?.warnings;
+        expect(warnings).toBeDefined();
+        expect(warnings.some((w: any) => w.message.includes('Failed to create tag'))).toBe(true);
+      });
+
+      it('should not call tag APIs when no tag operations are present', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'updateName', name: 'New Name' }],
+        }, mockRepository);
+
+        expect(mockApiClient.listTags).not.toHaveBeenCalled();
+        expect(mockApiClient.createTag).not.toHaveBeenCalled();
+        expect(mockApiClient.updateWorkflowTags).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('Project Transfer via Dedicated API', () => {
+      it('should call transferWorkflow when diffResult has transferToProjectId', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          transferToProjectId: 'project-abc-123',
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'transferWorkflow', destinationProjectId: 'project-abc-123' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(mockApiClient.transferWorkflow).toHaveBeenCalledWith('test-workflow-id', 'project-abc-123');
+        expect(result.message).toContain('transferred to project');
+      });
+
+      it('should NOT call transferWorkflow when transferToProjectId is absent', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'updateName', name: 'New Name' }],
+        }, mockRepository);
+
+        expect(mockApiClient.transferWorkflow).not.toHaveBeenCalled();
+      });
+
+      it('should return success false with saved true when transfer fails', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          transferToProjectId: 'project-bad-id',
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.transferWorkflow.mockRejectedValue(new Error('Project not found'));
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'transferWorkflow', destinationProjectId: 'project-bad-id' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.saved).toBe(true);
+        expect(result.error).toBe('Workflow updated successfully but project transfer failed');
+        expect(result.details).toEqual({
+          workflowUpdated: true,
+          transferError: 'Project not found',
+        });
+      });
+
+      it('should return Unknown error when non-Error value is thrown during transfer', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+          transferToProjectId: 'project-unknown',
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.transferWorkflow.mockRejectedValue('string error');
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{ type: 'transferWorkflow', destinationProjectId: 'project-unknown' }],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.saved).toBe(true);
+        expect(result.details).toEqual({
+          workflowUpdated: true,
+          transferError: 'Unknown error',
+        });
+      });
+
+      it('should call transferWorkflow BEFORE activateWorkflow', async () => {
+        const testWorkflow = createTestWorkflow({ active: false });
+        const updatedWorkflow = { ...testWorkflow, active: false };
+        const activatedWorkflow = { ...testWorkflow, active: true };
+
+        const callOrder: string[] = [];
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 2,
+          message: 'Success',
+          errors: [],
+          transferToProjectId: 'project-target',
+          shouldActivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.transferWorkflow.mockImplementation(async () => {
+          callOrder.push('transfer');
+        });
+        mockApiClient.activateWorkflow = vi.fn().mockImplementation(async () => {
+          callOrder.push('activate');
+          return activatedWorkflow;
+        });
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [
+            { type: 'transferWorkflow', destinationProjectId: 'project-target' },
+            { type: 'activateWorkflow' },
+          ],
+        }, mockRepository);
+
+        expect(result.success).toBe(true);
+        expect(mockApiClient.transferWorkflow).toHaveBeenCalledWith('test-workflow-id', 'project-target');
+        expect(mockApiClient.activateWorkflow).toHaveBeenCalledWith('test-workflow-id');
+        expect(callOrder).toEqual(['transfer', 'activate']);
+      });
+
+      it('should skip activation when transfer fails', async () => {
+        const testWorkflow = createTestWorkflow({ active: false });
+        const updatedWorkflow = { ...testWorkflow, active: false };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 2,
+          message: 'Success',
+          errors: [],
+          transferToProjectId: 'project-fail',
+          shouldActivate: true,
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+        mockApiClient.transferWorkflow.mockRejectedValue(new Error('Transfer denied'));
+        mockApiClient.activateWorkflow = vi.fn();
+
+        const result = await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [
+            { type: 'transferWorkflow', destinationProjectId: 'project-fail' },
+            { type: 'activateWorkflow' },
+          ],
+        }, mockRepository);
+
+        expect(result.success).toBe(false);
+        expect(result.saved).toBe(true);
+        expect(result.error).toBe('Workflow updated successfully but project transfer failed');
+        expect(mockApiClient.activateWorkflow).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('field name normalization', () => {
+      it('should normalize "name" to "nodeName" for updateNode operations', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{
+            type: 'updateNode',
+            name: 'HTTP Request',  // LLMs often use "name" instead of "nodeName"
+            updates: { 'parameters.url': 'https://new-url.com' },
+          }],
+        }, mockRepository);
+
+        // Verify the diff engine received nodeName (normalized from name)
+        expect(mockDiffEngine.applyDiff).toHaveBeenCalled();
+        const diffArgs = mockDiffEngine.applyDiff.mock.calls[0][1];
+        expect(diffArgs.operations[0].nodeName).toBe('HTTP Request');
+      });
+
+      it('should normalize "id" to "nodeId" for removeNode operations', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{
+            type: 'removeNode',
+            id: 'node2',  // LLMs may use "id" instead of "nodeId"
+          }],
+        }, mockRepository);
+
+        // Verify the diff engine received nodeId (normalized from id)
+        expect(mockDiffEngine.applyDiff).toHaveBeenCalled();
+        const diffArgs = mockDiffEngine.applyDiff.mock.calls[0][1];
+        expect(diffArgs.operations[0].nodeId).toBe('node2');
+      });
+
+      it('should NOT normalize "name" for updateName operations', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{
+            type: 'updateName',
+            name: 'New Workflow Name',  // This is the correct field for updateName
+          }],
+        }, mockRepository);
+
+        // Verify "name" stays as "name" (not moved to nodeName) for updateName
+        expect(mockDiffEngine.applyDiff).toHaveBeenCalled();
+        const diffArgs = mockDiffEngine.applyDiff.mock.calls[0][1];
+        expect(diffArgs.operations[0].name).toBe('New Workflow Name');
+        expect(diffArgs.operations[0].nodeName).toBeUndefined();
+      });
+
+      it('should prefer explicit "nodeName" over "name" alias', async () => {
+        const testWorkflow = createTestWorkflow();
+        const updatedWorkflow = { ...testWorkflow };
+
+        mockApiClient.getWorkflow.mockResolvedValue(testWorkflow);
+        mockDiffEngine.applyDiff.mockResolvedValue({
+          success: true,
+          workflow: updatedWorkflow,
+          operationsApplied: 1,
+          message: 'Success',
+          errors: [],
+        });
+        mockApiClient.updateWorkflow.mockResolvedValue(updatedWorkflow);
+
+        await handleUpdatePartialWorkflow({
+          id: 'test-workflow-id',
+          operations: [{
+            type: 'updateNode',
+            nodeName: 'HTTP Request',  // Explicit nodeName provided
+            name: 'Should Be Ignored',  // Should NOT override nodeName
+            updates: { 'parameters.url': 'https://new-url.com' },
+          }],
+        }, mockRepository);
+
+        expect(mockDiffEngine.applyDiff).toHaveBeenCalled();
+        const diffArgs = mockDiffEngine.applyDiff.mock.calls[0][1];
+        expect(diffArgs.operations[0].nodeName).toBe('HTTP Request');
+      });
+    });
+  });
+});

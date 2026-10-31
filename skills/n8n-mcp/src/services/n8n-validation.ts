@@ -1,0 +1,843 @@
+import crypto from 'crypto';
+import { z } from 'zod';
+import { WorkflowNode, WorkflowConnection, Workflow } from '../types/n8n-api';
+import { isActivatableTrigger } from '../utils/node-type-utils';
+import { DERIVED_SETTINGS_PROPERTIES } from '../constants/workflow-settings';
+import { isNonExecutableNode } from '../utils/node-classification';
+import {
+  normalizeMcpWorkflowConnections,
+  normalizeMcpWorkflowNode,
+} from '../utils/mcp-input-normalizer';
+
+// Zod schemas for n8n API validation
+
+// The writable node shape, kept separate from the preprocess wrapper so the write allowlist
+// below can be derived from its keys instead of being maintained as a second list.
+const workflowNodeObjectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.string(),
+  typeVersion: z.number(),
+  position: z.tuple([z.number(), z.number()]),
+  // Two-arg z.record(keySchema, valueSchema) is unambiguous in both Zod 3 and Zod 4.
+  // Zod 4 reinterprets single-arg z.record(x) as z.record(keySchema=x), which causes
+  // node-name strings to be parsed as the key schema and fail with "Invalid key in
+  // record" (#744). The MCP SDK bundles Zod 4; pinning the resolution alone is fragile.
+  parameters: z.record(z.string(), z.unknown()),
+  credentials: z.record(z.string(), z.unknown()).optional(),
+  disabled: z.boolean().optional(),
+  notes: z.string().optional(),
+  notesInFlow: z.boolean().optional(),
+  continueOnFail: z.boolean().optional(),
+  onError: z.enum(['continueRegularOutput', 'continueErrorOutput', 'stopWorkflow']).optional(),
+  retryOnFail: z.boolean().optional(),
+  maxTries: z.number().optional(),
+  waitBetweenTries: z.number().optional(),
+  alwaysOutputData: z.boolean().optional(),
+  executeOnce: z.boolean().optional(),
+  webhookId: z.string().optional(),
+  customTelemetryTags: z
+    .object({ tag: z.array(z.object({ key: z.string(), value: z.string() })).optional() })
+    .optional(),
+});
+
+export const workflowNodeSchema = z.preprocess(normalizeMcpWorkflowNode, workflowNodeObjectSchema);
+
+/**
+ * Node properties n8n's Public API write schema accepts, taken from the zod schema above so the
+ * two cannot drift apart. n8n's node schema is `additionalProperties: false`, so a property missing
+ * here is dropped from every write; `npm run check:settings-drift` compares this set against the
+ * schema n8n ships and fails when n8n adds one.
+ */
+export const WRITABLE_NODE_PROPERTIES: ReadonlySet<string> = new Set(Object.keys(workflowNodeObjectSchema.shape));
+
+/**
+ * Strip unknown properties from a single node so it conforms to n8n's write schema.
+ * n8n GET responses echo server-managed fields (e.g. issues, runIndex, data) that
+ * PUT/PATCH rejects with "must NOT have additional properties".
+ */
+export function cleanNodeForApi(node: WorkflowNode): WorkflowNode {
+  const cleaned = Object.entries(node).filter(([key]) => WRITABLE_NODE_PROPERTIES.has(key));
+  return Object.fromEntries(cleaned) as WorkflowNode;
+}
+
+// Connection array schema used by all connection types
+// The Public API stores a null branch verbatim - verified by POSTing such a workflow to a live
+// instance (#1096). Rejecting it here failed creates that validate_workflow had just passed,
+// with no way for the caller to tell which of the two validators was wrong.
+const connectionArraySchema = z.array(
+  z.array(
+    z.object({
+      node: z.string(),
+      type: z.string(),
+      index: z.number(),
+    })
+  ).nullable()
+);
+
+/**
+ * Workflow connection schema supporting all connection types.
+ * Note: 'main' is optional because AI nodes exclusively use AI-specific
+ * connection types (ai_languageModel, ai_memory, etc.) without main connections.
+ */
+export const workflowConnectionSchema = z.preprocess(normalizeMcpWorkflowConnections, z.record(
+  z.string(), // explicit key schema — see workflowNodeSchema for the Zod 3/4 rationale (#744)
+  z.object({
+    main: connectionArraySchema.optional(),
+    error: connectionArraySchema.optional(),
+    ai_tool: connectionArraySchema.optional(),
+    ai_languageModel: connectionArraySchema.optional(),
+    ai_memory: connectionArraySchema.optional(),
+    ai_embedding: connectionArraySchema.optional(),
+    ai_vectorStore: connectionArraySchema.optional(),
+  }).catchall(connectionArraySchema) // Allow additional AI connection types (ai_outputParser, ai_document, ai_textSplitter, etc.)
+));
+
+// Mirrors components.schemas.workflowSettings in n8n's Public API, minus the properties n8n
+// derives itself (see constants/workflow-settings.ts). Unknown keys are stripped by Zod here;
+// forwarding them to n8n is cleanWorkflowForUpdate's job, not this schema's.
+//
+// Hand-written rather than generated from that table, which does not model types or enum
+// values, and so NOT covered by `npm run check:settings-drift`. Keep it in step by hand when
+// the table gains a property.
+export const workflowSettingsSchema = z.object({
+  executionOrder: z.enum(['v0', 'v1']).default('v1'),
+  timezone: z.string().optional(),
+  saveDataErrorExecution: z.enum(['all', 'none']).default('all'),
+  saveDataSuccessExecution: z.enum(['all', 'none']).default('all'),
+  saveManualExecutions: z.boolean().default(true),
+  saveExecutionProgress: z.boolean().default(true),
+  executionTimeout: z.number().optional(),
+  errorWorkflow: z.string().optional(),
+  callerPolicy: z.enum(['any', 'none', 'workflowsFromSameOwner', 'workflowsFromAList']).optional(),
+  callerIds: z.string().optional(),
+  timeSavedMode: z.enum(['fixed', 'dynamic']).optional(),
+  timeSavedPerExecution: z.number().optional(),
+  redactionPolicy: z.enum(['none', 'non-manual', 'manual-only', 'all']).optional(),
+  availableInMCP: z.boolean().optional(),
+  customTelemetryTags: z
+    .array(z.object({ key: z.string(), value: z.string() }))
+    .optional(),
+});
+
+// Default settings for workflow creation
+export const defaultWorkflowSettings = {
+  executionOrder: 'v1' as const,
+  saveDataErrorExecution: 'all' as const,
+  saveDataSuccessExecution: 'all' as const,
+  saveManualExecutions: true,
+  saveExecutionProgress: true,
+};
+
+// Validation functions
+export function validateWorkflowNode(node: unknown): WorkflowNode {
+  return workflowNodeSchema.parse(node);
+}
+
+export function validateWorkflowConnections(connections: unknown): WorkflowConnection {
+  return workflowConnectionSchema.parse(connections);
+}
+
+export function validateWorkflowSettings(settings: unknown): z.infer<typeof workflowSettingsSchema> {
+  return workflowSettingsSchema.parse(settings);
+}
+
+const WEBHOOK_NODE_TYPES = new Set([
+  'n8n-nodes-base.webhook',
+  'n8n-nodes-base.webhookTrigger',
+  'n8n-nodes-base.formTrigger',
+  '@n8n/n8n-nodes-langchain.chatTrigger',
+]);
+
+function ensureWebhookIds(nodes?: WorkflowNode[]): void {
+  if (!nodes) return;
+  for (const node of nodes) {
+    if (WEBHOOK_NODE_TYPES.has(node.type) && !node.webhookId) {
+      node.webhookId = crypto.randomUUID();
+    }
+  }
+}
+
+/**
+ * Drop the settings properties n8n derives itself and ignores on write. GET echoes them back,
+ * and our writes merge over a GET, so they would otherwise ride along into a payload the write
+ * schema rejects. Everything else is forwarded - see cleanWorkflowForUpdate.
+ */
+function stripDerivedSettings(settings: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(settings).filter(([key]) => !DERIVED_SETTINGS_PROPERTIES.has(key))
+  );
+}
+
+/**
+ * Clean workflow data for create operations.
+ *
+ * This is a DENYLIST (unlike cleanWorkflowForUpdate): anything not named here is forwarded, so
+ * fields such as `nodeGroups` reach POST /workflows unchanged. Keep it that way — the create
+ * schema accepts the same writable fields as update.
+ */
+export function cleanWorkflowForCreate(workflow: Partial<Workflow>): Partial<Workflow> {
+  const {
+    // Remove read-only fields
+    id,
+    createdAt,
+    updatedAt,
+    versionId,
+    meta,
+    // Remove fields that cause API errors during creation
+    active,
+    tags,
+    // Keep everything else
+    ...cleanedWorkflow
+  } = workflow;
+
+  // Creating from a workflow read off another instance would otherwise carry the derived
+  // properties into a payload the create schema rejects.
+  if (cleanedWorkflow.settings && typeof cleanedWorkflow.settings === 'object') {
+    cleanedWorkflow.settings = stripDerivedSettings(
+      cleanedWorkflow.settings as Record<string, unknown>
+    ) as Workflow['settings'];
+  }
+
+  // Ensure settings are present with defaults
+  // Treat empty settings object {} the same as missing settings
+  if (!cleanedWorkflow.settings || Object.keys(cleanedWorkflow.settings).length === 0) {
+    cleanedWorkflow.settings = defaultWorkflowSettings;
+  }
+
+  ensureWebhookIds(cleanedWorkflow.nodes);
+
+  // Strip unknown node properties that n8n GET echoes but PUT/PATCH rejects
+  if (cleanedWorkflow.nodes) {
+    cleanedWorkflow.nodes = cleanedWorkflow.nodes.map(cleanNodeForApi);
+  }
+
+  return cleanedWorkflow;
+}
+
+/**
+ * Clean workflow data for update operations.
+ *
+ * n8n's Public API write schema (workflow.yml, used for PUT /workflows/{id}) declares
+ * `additionalProperties: false` and accepts only a small set of writable top-level fields:
+ * name, nodes, connections, settings and — since n8n 2.28 — nodeGroups. The GET response,
+ * however, echoes back many server-managed / read-only fields (id, versionId, triggerCount,
+ * activeVersion, ...) and fields that aren't in the OpenAPI spec at all (e.g. activeVersionId,
+ * versionCounter, and a top-level `availableInMCP` column added for the MCP feature).
+ *
+ * When n8n_update_partial_workflow reads a workflow, applies a diff and writes it back, any
+ * such echoed field that a denylist doesn't explicitly drop leaks into the payload and
+ * triggers: "Invalid request: request/body must NOT have additional properties".
+ *
+ * We therefore use an ALLOWLIST rather than a denylist for top-level fields: only fields the
+ * write schema accepts are forwarded. This is forward-compatible — new read-only fields n8n
+ * adds in future versions can never break updates.
+ *
+ * The settings object inside it is the opposite: everything is forwarded except the properties
+ * n8n derives and ignores on write, because an allowlist there drops settings n8n added after
+ * we last looked. Version-appropriate filtering happens in N8nApiClient.updateWorkflow(), which
+ * detects the target version first.
+ *
+ * @param workflow - The workflow object to clean
+ * @returns A cleaned partial workflow suitable for API updates
+ */
+export function cleanWorkflowForUpdate(workflow: Workflow): Partial<Workflow> {
+  const source = workflow as any;
+
+  // Allowlist of top-level fields we send on update. `description` is omitted because some n8n
+  // versions reject it on update (Issue #431), and `staticData`/`pinData` are server-managed.
+  //
+  // `nodeGroups` is forwarded when present: omitting it does NOT leave canvas groups alone —
+  // n8n backfills the stored groups and validates them against the nodes we submit, so a diff
+  // that removes a grouped node fails with 400 unless we send the corrected groups.
+  // Per-group keys are filtered and version incompatibilities handled by
+  // N8nApiClient.updateWorkflow(), which can degrade and retry; see services/node-groups.ts.
+  const cleanedWorkflow: Record<string, unknown> = {};
+  if (source.name !== undefined) cleanedWorkflow.name = source.name;
+  if (source.nodes !== undefined) cleanedWorkflow.nodes = source.nodes;
+  if (source.connections !== undefined) cleanedWorkflow.connections = source.connections;
+  if (Array.isArray(source.nodeGroups)) cleanedWorkflow.nodeGroups = source.nodeGroups;
+  if (source.settings !== undefined) cleanedWorkflow.settings = source.settings;
+  // Write-only folder placement (n8n 2.32+): null moves to the project root. GET responses
+  // never echo it, so it only appears here when a caller explicitly asked for a move.
+  if (source.parentFolderId !== undefined) cleanedWorkflow.parentFolderId = source.parentFolderId;
+
+  if (cleanedWorkflow.settings && typeof cleanedWorkflow.settings === 'object') {
+    // Everything else is forwarded. An allowlist here silently dropped each new n8n setting
+    // until someone noticed - version-appropriate filtering belongs in
+    // N8nApiClient.updateWorkflow(), which knows the target version.
+    const filteredSettings = stripDerivedSettings(
+      cleanedWorkflow.settings as Record<string, unknown>
+    );
+    // If no valid properties remain after filtering, use minimal defaults
+    // Issue #431: n8n API rejects empty settings objects
+    if (Object.keys(filteredSettings).length > 0) {
+      cleanedWorkflow.settings = filteredSettings;
+    } else {
+      // Minimal valid settings - executionOrder v1 is the modern default
+      cleanedWorkflow.settings = { executionOrder: 'v1' as const };
+    }
+  } else {
+    // No settings provided - use minimal valid defaults
+    cleanedWorkflow.settings = { executionOrder: 'v1' as const };
+  }
+
+  ensureWebhookIds(cleanedWorkflow.nodes as WorkflowNode[] | undefined);
+
+  // Strip unknown node properties that n8n GET echoes but PUT/PATCH rejects
+  if (cleanedWorkflow.nodes) {
+    cleanedWorkflow.nodes = (cleanedWorkflow.nodes as WorkflowNode[]).map(cleanNodeForApi);
+  }
+
+  return cleanedWorkflow as Partial<Workflow>;
+}
+
+/**
+ * A failed Zod parse carries the whole issue array serialised as JSON in `error.message`,
+ * which reaches MCP clients as a dozen lines per malformed node or connection. Collapse it
+ * to one clause per issue: the offending field, then the reason.
+ */
+function describeParseFailure(error: unknown): string {
+  if (!(error instanceof z.ZodError)) {
+    return error instanceof Error ? error.message : 'Unknown error';
+  }
+
+  return error.issues
+    .map(issue => (issue.path.length > 0 ? `"${issue.path.join('.')}": ${issue.message}` : issue.message))
+    .join('; ');
+}
+
+// Validate workflow structure
+export function validateWorkflowStructure(workflow: Partial<Workflow>): string[] {
+  const errors: string[] = [];
+
+  // Check required fields
+  if (!workflow.name) {
+    errors.push('Workflow name is required');
+  }
+
+  if (!workflow.nodes || workflow.nodes.length === 0) {
+    errors.push('Workflow must have at least one node');
+  }
+
+  // Validate node shapes before graph checks inspect names, types, or parameters.
+  if (workflow.nodes) {
+    if (!Array.isArray(workflow.nodes)) {
+      errors.push('Workflow nodes must be an array');
+      return errors;
+    }
+
+    const nodes: WorkflowNode[] = [];
+    const shapeErrors: string[] = [];
+    for (const [index, node] of workflow.nodes.entries()) {
+      try {
+        nodes.push(validateWorkflowNode(node));
+      } catch (error) {
+        shapeErrors.push(`Invalid node at index ${index}: ${describeParseFailure(error)}`);
+      }
+    }
+
+    // Connectivity computed over a node of unknown shape is misleading, so the shape
+    // errors are the whole answer when there are any.
+    if (shapeErrors.length > 0) {
+      return [...errors, ...shapeErrors];
+    }
+
+    // Use normalized fields without changing the caller's workflow.
+    workflow = { ...workflow, nodes };
+  }
+
+  // Check if workflow has only non-executable nodes (sticky notes)
+  if (workflow.nodes && workflow.nodes.length > 0) {
+    const hasExecutableNodes = workflow.nodes.some(node => !isNonExecutableNode(node.type));
+    if (!hasExecutableNodes) {
+      errors.push('Workflow must have at least one executable node. Sticky notes alone cannot form a valid workflow.');
+    }
+  }
+
+  if (!workflow.connections) {
+    errors.push('Workflow connections are required');
+  } else {
+    // Same reasoning as the node gate above, one level down: the disconnected-node scan, the
+    // Switch branch counts and the reference checks all walk this object without checking it,
+    // so a malformed source entry throws mid-traversal and escapes the validator (#1094).
+    // Parsing here also normalizes MCP-mangled input, so those checks see the repaired shape.
+    try {
+      workflow = { ...workflow, connections: validateWorkflowConnections(workflow.connections) };
+    } catch (error) {
+      return [...errors, `Invalid connections: ${describeParseFailure(error)}`];
+    }
+  }
+
+  // Check for minimum viable workflow
+  if (workflow.nodes && workflow.nodes.length === 1) {
+    const singleNode = workflow.nodes[0];
+    const isWebhookOnly = singleNode.type === 'n8n-nodes-base.webhook' ||
+                         singleNode.type === 'n8n-nodes-base.webhookTrigger';
+
+    if (!isWebhookOnly) {
+      errors.push(`Single non-webhook node workflow is invalid. Current node: "${singleNode.name}" (${singleNode.type}). Add another node using: {type: 'addNode', node: {name: 'Process Data', type: 'n8n-nodes-base.set', typeVersion: 3.4, position: [450, 300], parameters: {}}}`);
+    }
+  }
+
+  // Check for disconnected nodes in multi-node workflows
+  if (workflow.nodes && workflow.nodes.length > 1 && workflow.connections) {
+    // Filter out non-executable nodes (sticky notes) when counting nodes
+    const executableNodes = workflow.nodes.filter(node => !isNonExecutableNode(node.type));
+    const connectionCount = Object.keys(workflow.connections).length;
+
+    // First check: workflow has no connections at all (only check if there are multiple executable nodes)
+    if (connectionCount === 0 && executableNodes.length > 1) {
+      const nodeNames = executableNodes.slice(0, 2).map(n => n.name);
+      errors.push(`Multi-node workflow has no connections between nodes. Add a connection using: {type: 'addConnection', source: '${nodeNames[0]}', target: '${nodeNames[1]}', sourcePort: 'main', targetPort: 'main'}`);
+    } else if (connectionCount > 0 || executableNodes.length > 1) {
+      // Second check: detect disconnected nodes (nodes with no incoming or outgoing connections)
+      const connectedNodes = new Set<string>();
+
+      // Collect all nodes that appear in connections (as source or target)
+      // Iterate over ALL connection types present in the data — not a hardcoded list —
+      // so that every AI connection type (ai_outputParser, ai_document, ai_textSplitter,
+      // ai_agent, ai_chain, ai_retriever, etc.) is covered automatically.
+      Object.entries(workflow.connections).forEach(([sourceName, connection]) => {
+        // A source key counts as an outgoing connection only once it names a target. n8n keeps
+        // the key with empty branches (`main: [[]]`, `main: [null]`) after the last edge is
+        // removed, and an empty key vouching for its own node let two isolated nodes pass (#1101).
+        let hasTarget = false;
+
+        // Check every connection type key present on this source node
+        const connectionRecord = connection as Record<string, unknown>;
+        Object.values(connectionRecord).forEach((connData) => {
+          if (connData && Array.isArray(connData)) {
+            connData.forEach((outputs) => {
+              if (Array.isArray(outputs)) {
+                outputs.forEach((target: { node: string }) => {
+                  if (target?.node) {
+                    connectedNodes.add(target.node); // Node has incoming connection
+                    hasTarget = true;
+                  }
+                });
+              }
+            });
+          }
+        });
+
+        if (hasTarget) connectedNodes.add(sourceName); // Node has outgoing connection
+      });
+
+      // Find disconnected nodes (excluding non-executable nodes and triggers)
+      // Non-executable nodes (sticky notes) are UI-only and don't need connections
+      // Trigger nodes need either outgoing connections OR inbound AI connections (for mcpTrigger)
+      const disconnectedNodes = workflow.nodes.filter(node => {
+        // Skip non-executable nodes (sticky notes, etc.) - they're UI-only annotations
+        if (isNonExecutableNode(node.type)) {
+          return false;
+        }
+
+        // Every node, trigger or not, needs one edge in either direction. mcpTrigger only
+        // receives inbound ai_tool connections, and those count like any other target.
+        return !connectedNodes.has(node.name);
+      });
+
+      if (disconnectedNodes.length > 0) {
+        const disconnectedList = disconnectedNodes.map(n => `"${n.name}" (${n.type})`).join(', ');
+        const firstDisconnected = disconnectedNodes[0];
+        // Suggest a connected executable node as the source; a sticky note is never one, and
+        // with no other executable node there is nothing to suggest.
+        const suggestedSource = workflow.nodes.find(n => connectedNodes.has(n.name) && !isNonExecutableNode(n.type))?.name
+          || workflow.nodes.find(n => n.name !== firstDisconnected.name && !isNonExecutableNode(n.type))?.name;
+        const hint = suggestedSource
+          ? ` Add a connection: {type: 'addConnection', source: '${suggestedSource}', target: '${firstDisconnected.name}', sourcePort: 'main', targetPort: 'main'}`
+          : '';
+
+        errors.push(`Disconnected nodes detected: ${disconnectedList}. Each node must have at least one connection.${hint}`);
+      }
+    }
+  }
+
+  // Check for common node type mistakes after node shapes have been validated.
+  if (workflow.nodes) {
+    workflow.nodes.forEach((node, index) => {
+      if (node.type.startsWith('nodes-base.')) {
+        errors.push(`Invalid node type "${node.type}" at index ${index}. Use "n8n-nodes-base.${node.type.substring(11)}" instead.`);
+      } else if (!node.type.includes('.')) {
+        errors.push(`Invalid node type "${node.type}" at index ${index}. Node types must include package prefix (e.g., "n8n-nodes-base.webhook").`);
+      }
+    });
+  }
+
+  // Validate If/Switch condition structures (version-conditional)
+  if (workflow.nodes) {
+    workflow.nodes.forEach((node, index) => {
+      const filterErrors = validateConditionNodeStructure(node);
+      if (filterErrors.length > 0) {
+        errors.push(...filterErrors.map(err => `Node "${node.name}" (index ${index}): ${err}`));
+      }
+    });
+  }
+
+  // Validate active workflows have activatable triggers
+  // NOTE: Since n8n 2.0, executeWorkflowTrigger is now activatable and MUST be activated to work
+  if ((workflow as any).active === true && workflow.nodes && workflow.nodes.length > 0) {
+    const activatableTriggers = workflow.nodes.filter(node =>
+      !node.disabled && isActivatableTrigger(node.type)
+    );
+
+    if (activatableTriggers.length === 0) {
+      errors.push(
+        'Cannot activate workflow: No activatable trigger nodes found. ' +
+        'Workflows must have at least one enabled trigger node (webhook, schedule, executeWorkflowTrigger, etc.).'
+      );
+    }
+  }
+
+  // Validate Switch and IF node connection structures match their rules
+  if (workflow.nodes && workflow.connections) {
+    // Switch v1 has four fixed outputs whatever its rules say; from v2 on the outputs follow
+    // the rules, so only those versions can be checked against them.
+    const switchNodes = workflow.nodes.filter(node => isRulesModeSwitch(node) && (node.typeVersion || 1) >= 2);
+
+    const ruleLabel = (rule: any, i: number) =>
+      typeof rule?.outputKey === 'string' ? `"${rule.outputKey}" (index ${i})` : `Rule ${i}`;
+
+    for (const switchNode of switchNodes) {
+      const params = switchNode.parameters as any;
+      // n8n stores the rules under `rules.values` from typeVersion 3.2 on; `rules.rules` is the
+      // legacy key. Reading only the legacy key meant this check never ran on a current Switch
+      // (#1100). Caller-supplied: a string or an object with a `length` reaches the branch-count
+      // read below and then has no `.map` (#1094). Only an array describes rules.
+      const ruleCollection = params?.rules?.values ?? params?.rules?.rules;
+      const rules = Array.isArray(ruleCollection) ? ruleCollection : [];
+      const nodeConnections = workflow.connections[switchNode.name];
+
+      // An empty rule collection is a valid Switch (its fallback output may be the only one),
+      // so the check keys on the collection being an array, not on it holding rules.
+      if (Array.isArray(ruleCollection) && nodeConnections?.main) {
+        const outputBranches = nodeConnections.main.length;
+
+        // `fallbackOutput: 'extra'` adds one output after the rule outputs. 'none' (the
+        // default) or an output index routes unmatched items to an existing output and adds
+        // nothing. Only the extra output can carry a connection of its own.
+        const fallbackOutput = params?.options?.fallbackOutput ?? params?.fallbackOutput;
+        const fallbackOutputs = fallbackOutput === 'extra' ? 1 : 0;
+        // `onError: continueErrorOutput` appends an error output after the natural ones.
+        const errorOutputs = switchNode.onError === 'continueErrorOutput' ? 1 : 0;
+        const outputCount = rules.length + fallbackOutputs + errorOutputs;
+
+        // n8n omits trailing branches that have no connection, so fewer branches than rules is
+        // how it exports a Switch whose last rules route nowhere. More branches than the node
+        // has outputs can only come from a caller.
+        if (outputBranches > outputCount) {
+          const ruleNames = rules.map(ruleLabel).join(', ');
+
+          errors.push(
+            `Switch node "${switchNode.name}" has ${rules.length} rules [${ruleNames}]` +
+            (fallbackOutputs ? ' plus a fallback output' : '') +
+            (errorOutputs ? ' plus an error output' : '') +
+            ` but ${outputBranches} output branches in connections. ` +
+            (outputCount > 0
+              ? `Outputs are indexed 0 to ${outputCount - 1}; remove the extra branches or add rules for them.`
+              : 'The Switch has no outputs; add rules or a fallback output before connecting branches.')
+          );
+        }
+
+        // An output with no connection is not reported: n8n routes matched items into nothing,
+        // and 13 of the bundled templates rely on that for a rule they do not act on.
+      }
+    }
+  }
+
+  // Validate that all connection references exist and use node NAMES (not IDs)
+  if (workflow.nodes && workflow.connections) {
+    const nodeNames = new Set(workflow.nodes.map(node => node.name));
+    const nodeIds = new Set(workflow.nodes.map(node => node.id));
+    const nodeIdToName = new Map(workflow.nodes.map(node => [node.id, node.name]));
+
+    Object.entries(workflow.connections).forEach(([sourceName, connection]) => {
+      // Check if source exists by name (correct)
+      if (!nodeNames.has(sourceName)) {
+        // Check if they're using an ID instead of name
+        if (nodeIds.has(sourceName)) {
+          const correctName = nodeIdToName.get(sourceName);
+          errors.push(`Connection uses node ID '${sourceName}' but must use node name '${correctName}'. Change connections.${sourceName} to connections['${correctName}']`);
+        } else {
+          errors.push(`Connection references non-existent node: ${sourceName}`);
+        }
+      }
+      
+      // Check all connection types (main, error, ai_tool, ai_languageModel, etc.)
+      const connectionRecord = connection as Record<string, unknown>;
+      Object.values(connectionRecord).forEach((connData) => {
+        if (connData && Array.isArray(connData)) {
+          connData.forEach((outputs: any, outputIndex: number) => {
+            if (Array.isArray(outputs)) {
+              outputs.forEach((target: any, targetIndex: number) => {
+                if (!target?.node) return;
+                // Check if target exists by name (correct)
+                if (!nodeNames.has(target.node)) {
+                  // Check if they're using an ID instead of name
+                  if (nodeIds.has(target.node)) {
+                    const correctName = nodeIdToName.get(target.node);
+                    errors.push(`Connection target uses node ID '${target.node}' but must use node name '${correctName}' (from ${sourceName}[${outputIndex}][${targetIndex}])`);
+                  } else {
+                    errors.push(`Connection references non-existent target node: ${target.node} (from ${sourceName}[${outputIndex}][${targetIndex}])`);
+                  }
+                }
+              });
+            }
+          });
+        }
+      });
+    });
+  }
+
+  return errors;
+}
+
+// Check if workflow has webhook trigger
+export function hasWebhookTrigger(workflow: Workflow): boolean {
+  return workflow.nodes.some(node =>
+    node.type === 'n8n-nodes-base.webhook' ||
+    node.type === 'n8n-nodes-base.webhookTrigger'
+  );
+}
+
+/**
+ * Validate If/Switch node conditions structure for ANY version.
+ * Version-conditional: validates the correct structure per version.
+ */
+export function validateConditionNodeStructure(node: WorkflowNode): string[] {
+  const errors: string[] = [];
+  const typeVersion = node.typeVersion || 1;
+
+  // conditions.options and all its sub-fields (version, leftValue,
+  // caseSensitive, typeValidation) are optional in n8n — the runtime applies
+  // defaults — so only the operator structure is validated here.
+  if (node.type === 'n8n-nodes-base.if' || node.type === 'n8n-nodes-base.filter') {
+    // IF v2+ and Filter v2+ share the filter parameter shape.
+    if (typeVersion >= 2) {
+      errors.push(...validateFilterConditionOperators(node.parameters?.conditions, 'conditions'));
+    }
+  } else if (isRulesModeSwitch(node) && typeVersion >= 3.2) {
+    const rules = node.parameters?.rules as any;
+
+    // `values` is the key n8n actually reads: the `rules` fixedCollection declares one option
+    // and it is named `values`. Validating only `rules.rules` meant the operator checks below
+    // never ran for 319 of the 448 Switch nodes in the bundled templates (#1097). Both keys are
+    // walked - the legacy one still reaches the branch-count check in validateWorkflowStructure.
+    errors.push(...validateSwitchRuleCollection(rules?.values, 'rules.values'));
+    errors.push(...validateSwitchRuleCollection(rules?.rules, 'rules.rules'));
+  }
+
+  return errors;
+}
+
+/**
+ * A Switch that routes on conditions. Expression- and json-mode Switches can retain a stale
+ * hidden rule collection that n8n ignores at runtime, so neither the rule validation nor the
+ * branch-count check in validateWorkflowStructure should read it. Mode defaults to "rules".
+ */
+function isRulesModeSwitch(node: WorkflowNode): boolean {
+  if (node.type !== 'n8n-nodes-base.switch') return false;
+  const mode = (node.parameters as any)?.mode;
+  return !mode || mode === 'rules';
+}
+
+/**
+ * Validate one Switch rule collection, `rules.values` or the legacy `rules.rules`.
+ *
+ * A present collection that is not an array is reported rather than read as zero rules: the
+ * branch-count check in validateWorkflowStructure falls back to an empty array so a string
+ * cannot reach its `.map`, and without this nothing would say why (#1094). An absent one is
+ * left alone - a Switch carries its rules under one key, not both.
+ */
+function validateSwitchRuleCollection(collection: any, path: string): string[] {
+  if (collection === undefined || collection === null) return [];
+  if (!Array.isArray(collection)) return [`${path}: rules is not an array`];
+
+  const errors: string[] = [];
+  collection.forEach((rule: any, i: number) => {
+    // Report an entry that is not a rule rather than reading `conditions` off it: the
+    // branch-count check in validateWorkflowStructure reads these entries too (#1094).
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      errors.push(`${path}[${i}]: rule is missing or not an object`);
+      return;
+    }
+    errors.push(...validateFilterConditionOperators(rule.conditions, `${path}[${i}].conditions`));
+  });
+
+  return errors;
+}
+
+function validateFilterConditionOperators(conditions: any, path: string): string[] {
+  const errors: string[] = [];
+  if (!conditions?.conditions || !Array.isArray(conditions.conditions)) return errors;
+
+  conditions.conditions.forEach((condition: any, i: number) => {
+    errors.push(...validateOperatorStructure(
+      condition?.operator,
+      `${path}.conditions[${i}].operator`
+    ));
+  });
+  return errors;
+}
+
+/** @deprecated Use validateConditionNodeStructure instead */
+export function validateFilterBasedNodeMetadata(node: WorkflowNode): string[] {
+  return validateConditionNodeStructure(node);
+}
+
+/**
+ * The data types a filter operator may declare - n8n's own FilterOperatorType. `any` is in it
+ * and n8n's runtime short-circuits validation for that type (filter-parameter.js:
+ * `if (type === 'any' ...) return {valid: true}`), so reporting it would be a false positive.
+ * None of the 2,352 bundled templates carries one, but #1097 points this check at the key real
+ * workflows use, so the exposure is no longer theoretical.
+ */
+export const FILTER_OPERATOR_TYPES = ['string', 'number', 'boolean', 'dateTime', 'array', 'object', 'any'];
+
+/**
+ * Name a rejected operator field for an error message without coercing it. JSON can express an
+ * object that throws `Cannot convert object to primitive value` on interpolation
+ * (`{"toString": null, "valueOf": null}`), which turned a reportable malformed operator into an
+ * internal failure - the defect class 2.84.1 through 2.84.3 closed elsewhere.
+ */
+export function describeOperatorValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'nothing';
+  if (Array.isArray(value)) return 'an array';
+  if (typeof value === 'object') return 'an object';
+  return typeof value === 'string' ? `"${value}"` : `a ${typeof value} (${String(value)})`;
+}
+
+/**
+ * Validate operator structure
+ * Ensures operator has correct format: {type, operation, singleValue?}
+ */
+export function validateOperatorStructure(operator: any, path: string): string[] {
+  const errors: string[] = [];
+
+  if (!operator || typeof operator !== 'object') {
+    errors.push(`${path}: operator is missing or not an object`);
+    return errors;
+  }
+
+  // Check required field: type (data type, not operation name)
+  if (!operator.type) {
+    errors.push(
+      `${path}: missing required field "type". ` +
+      `Must be a data type: ${FILTER_OPERATOR_TYPES.map(t => `"${t}"`).join(', ')}`
+    );
+  } else if (!FILTER_OPERATOR_TYPES.includes(operator.type)) {
+    errors.push(
+      `${path}: invalid type ${describeOperatorValue(operator.type)}. ` +
+      `Type must be a data type (${FILTER_OPERATOR_TYPES.join(', ')}), not an operation name. ` +
+      'Did you mean to use the "operation" field?'
+    );
+  }
+
+  // Check required field: operation
+  if (!operator.operation) {
+    errors.push(
+      `${path}: missing required field "operation". ` +
+      'Operation specifies the comparison type (e.g., "equals", "contains", "notEmpty")'
+    );
+  }
+
+  // "singleValue" is deliberately not validated: n8n derives unary-ness from
+  // the operation name and ignores the flag at runtime (it is UI metadata that
+  // the write-path sanitizer normalizes on save).
+
+  return errors;
+}
+
+// Get webhook URL from workflow
+export function getWebhookUrl(workflow: Workflow): string | null {
+  const webhookNode = workflow.nodes.find(node => 
+    node.type === 'n8n-nodes-base.webhook' || 
+    node.type === 'n8n-nodes-base.webhookTrigger'
+  );
+
+  if (!webhookNode || !webhookNode.parameters) {
+    return null;
+  }
+
+  // Check for path parameter
+  const path = webhookNode.parameters.path as string | undefined;
+  if (!path) {
+    return null;
+  }
+
+  // Note: We can't construct the full URL without knowing the n8n instance URL
+  // The caller will need to prepend the base URL
+  return path;
+}
+
+// Helper function to generate proper workflow structure examples
+export function getWorkflowStructureExample(): string {
+  return `
+Minimal Workflow Example:
+{
+  "name": "My Workflow",
+  "nodes": [
+    {
+      "id": "manual-trigger-1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "set-1",
+      "name": "Set Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [{
+            "id": "1",
+            "name": "message",
+            "value": "Hello World",
+            "type": "string"
+          }]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{
+        "node": "Set Data",
+        "type": "main",
+        "index": 0
+      }]]
+    }
+  }
+}
+
+IMPORTANT: In connections, use the node NAME (e.g., "Manual Trigger"), NOT the node ID or type!`;
+}
+
+// Helper function to fix common workflow issues
+export function getWorkflowFixSuggestions(errors: string[]): string[] {
+  const suggestions: string[] = [];
+  
+  if (errors.some(e => e.includes('empty connections'))) {
+    suggestions.push('Add connections between your nodes. Each node (except endpoints) should connect to another node.');
+    suggestions.push('Connection format: connections: { "Source Node Name": { "main": [[{ "node": "Target Node Name", "type": "main", "index": 0 }]] } }');
+  }
+  
+  if (errors.some(e => e.includes('Single-node workflows'))) {
+    suggestions.push('Add at least one more node to process data. Common patterns: Trigger → Process → Output');
+    suggestions.push('Examples: Manual Trigger → Set, Webhook → HTTP Request, Schedule Trigger → Database Query');
+  }
+  
+  if (errors.some(e => e.includes('node ID') && e.includes('instead of node name'))) {
+    suggestions.push('Replace node IDs with node names in connections. The name is what appears in the node header.');
+    suggestions.push('Wrong: connections: { "set-1": {...} }, Right: connections: { "Set Data": {...} }');
+  }
+  
+  return suggestions;
+}

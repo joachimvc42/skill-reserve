@@ -1,0 +1,609 @@
+/**
+ * Node Sanitizer Tests
+ * Tests for auto-adding required metadata to filter-based nodes
+ */
+
+import { describe, it, expect } from 'vitest';
+import { sanitizeNode, validateNodeMetadata } from '../../../src/services/node-sanitizer';
+import { WorkflowNode } from '../../../src/types/n8n-api';
+
+describe('Node Sanitizer', () => {
+  describe('sanitizeNode', () => {
+    it('should add complete filter options to IF v2.2 node', () => {
+      const node: WorkflowNode = {
+        id: 'test-if',
+        name: 'IF Node',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            conditions: [
+              {
+                id: 'condition1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'string',
+                  operation: 'isNotEmpty'
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+
+      // Check that options were added
+      expect(sanitized.parameters.conditions).toHaveProperty('options');
+      const options = (sanitized.parameters.conditions as any).options;
+
+      expect(options).toEqual({
+        version: 2,
+        leftValue: '',
+        caseSensitive: true,
+        typeValidation: 'strict'
+      });
+    });
+
+    it('should preserve existing options while adding missing fields', () => {
+      const node: WorkflowNode = {
+        id: 'test-if-partial',
+        name: 'IF Node Partial',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            options: {
+              caseSensitive: false // User-provided value
+            },
+            conditions: []
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+      const options = (sanitized.parameters.conditions as any).options;
+
+      // Should preserve user value
+      expect(options.caseSensitive).toBe(false);
+
+      // Should add missing fields
+      expect(options.version).toBe(2);
+      expect(options.leftValue).toBe('');
+      expect(options.typeValidation).toBe('strict');
+    });
+
+    it('should fix invalid operator structure (type field misuse)', () => {
+      const node: WorkflowNode = {
+        id: 'test-if-bad-operator',
+        name: 'IF Bad Operator',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            conditions: [
+              {
+                id: 'condition1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'isNotEmpty' // WRONG: type should be data type, not operation
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+      const condition = (sanitized.parameters.conditions as any).conditions[0];
+
+      // Should fix operator structure and auto-correct isNotEmpty to notEmpty
+      expect(condition.operator.type).toBe('string'); // Inferred data type (default)
+      expect(condition.operator.operation).toBe('notEmpty'); // Moved to operation field and auto-corrected
+    });
+
+    it('should add singleValue for unary operators', () => {
+      const node: WorkflowNode = {
+        id: 'test-if-unary',
+        name: 'IF Unary',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            conditions: [
+              {
+                id: 'condition1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'string',
+                  operation: 'isNotEmpty'
+                  // Missing singleValue
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+      const condition = (sanitized.parameters.conditions as any).conditions[0];
+
+      expect(condition.operator.singleValue).toBe(true);
+    });
+
+    it('should sanitize Switch v3.2 node rules', () => {
+      const node: WorkflowNode = {
+        id: 'test-switch',
+        name: 'Switch Node',
+        type: 'n8n-nodes-base.switch',
+        typeVersion: 3.2,
+        position: [0, 0],
+        parameters: {
+          mode: 'rules',
+          rules: {
+            rules: [
+              {
+                outputKey: 'audio',
+                conditions: {
+                  conditions: [
+                    {
+                      id: 'cond1',
+                      leftValue: '={{ $json.fileType }}',
+                      rightValue: 'audio',
+                      operator: {
+                        type: 'string',
+                        operation: 'equals'
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+      const rule = (sanitized.parameters.rules as any).rules[0];
+
+      // Check that options were added to rule conditions
+      expect(rule.conditions).toHaveProperty('options');
+      expect(rule.conditions.options).toEqual({
+        version: 2,
+        leftValue: '',
+        caseSensitive: true,
+        typeValidation: 'strict'
+      });
+    });
+
+    it('should not modify non-filter nodes', () => {
+      const node: WorkflowNode = {
+        id: 'test-http',
+        name: 'HTTP Request',
+        type: 'n8n-nodes-base.httpRequest',
+        typeVersion: 4.2,
+        position: [0, 0],
+        parameters: {
+          method: 'GET',
+          url: 'https://example.com'
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+
+      // Should return unchanged
+      expect(sanitized).toEqual(node);
+    });
+
+    it('should not modify old IF versions', () => {
+      const node: WorkflowNode = {
+        id: 'test-if-old',
+        name: 'Old IF',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.0, // Pre-filter version
+        position: [0, 0],
+        parameters: {
+          conditions: []
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+
+      // Should return unchanged
+      expect(sanitized).toEqual(node);
+    });
+
+    it('should remove singleValue from binary operators like "equals"', () => {
+      const node: WorkflowNode = {
+        id: 'test-if-binary',
+        name: 'IF Binary Operator',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            conditions: [
+              {
+                id: 'condition1',
+                leftValue: '={{ $json.value }}',
+                rightValue: 'test',
+                operator: {
+                  type: 'string',
+                  operation: 'equals',
+                  singleValue: true // WRONG: equals is binary, not unary
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+      const condition = (sanitized.parameters.conditions as any).conditions[0];
+
+      // Should remove singleValue from binary operator
+      expect(condition.operator.singleValue).toBeUndefined();
+      expect(condition.operator.type).toBe('string');
+      expect(condition.operator.operation).toBe('equals');
+    });
+
+    it('should auto-correct isNotEmpty to notEmpty', () => {
+      const node: WorkflowNode = {
+        id: 'test-if-autocorrect',
+        name: 'IF AutoCorrect',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            conditions: [
+              {
+                id: 'condition1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'string',
+                  operation: 'isNotEmpty' // Legacy operator name
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const sanitized = sanitizeNode(node);
+      const condition = (sanitized.parameters.conditions as any).conditions[0];
+
+      // Should auto-correct isNotEmpty to notEmpty
+      expect(condition.operator.operation).toBe('notEmpty');
+      expect(condition.operator.type).toBe('string');
+      expect(condition.operator.singleValue).toBe(true); // notEmpty is unary
+    });
+
+    // `values` is the key n8n reads at 3.2+ and the one most real workflows use. Sanitizing only
+    // `rules` meant an operator the condition validator now reports under `values` was never
+    // repaired on the way in, so the caller was told to retry a payload nothing would fix (#1097).
+    it('sanitizes Switch rules stored under "values"', () => {
+      const node = {
+        id: '1', name: 'Switch', type: 'n8n-nodes-base.switch', typeVersion: 3.2,
+        position: [0, 0] as [number, number],
+        parameters: {
+          mode: 'rules',
+          rules: {
+            values: [{
+              outputKey: 'has a name',
+              conditions: {
+                conditions: [{
+                  id: 'c1',
+                  leftValue: '={{ $json.name }}',
+                  operator: { type: 'notEmpty' }
+                }]
+              }
+            }]
+          }
+        }
+      } as unknown as WorkflowNode;
+
+      const sanitized = sanitizeNode(node);
+      const rule = (sanitized.parameters.rules as any).values[0];
+
+      expect(rule.conditions.options).toEqual({
+        version: 2,
+        leftValue: '',
+        caseSensitive: true,
+        typeValidation: 'strict'
+      });
+      // The repair that {type: "notEmpty"} gets under `rules` — an operation name moved out of
+      // the type field, with the data type inferred (notEmpty infers "object", see inferDataType).
+      expect(rule.conditions.conditions[0].operator).toMatchObject({
+        type: 'object',
+        operation: 'notEmpty'
+      });
+    });
+
+    it('leaves a non-object entry under "values" untouched, as it does under "rules"', () => {
+      const node = {
+        id: '1', name: 'Switch', type: 'n8n-nodes-base.switch', typeVersion: 3.2,
+        position: [0, 0] as [number, number],
+        parameters: { rules: { values: [null, 'Branch 1', []] } }
+      } as unknown as WorkflowNode;
+
+      expect((sanitizeNode(node).parameters.rules as any).values).toEqual([null, 'Branch 1', []]);
+    });
+
+    it('leaves an operator declaring the "any" data type alone', () => {
+      const node = {
+        id: '1', name: 'Switch', type: 'n8n-nodes-base.switch', typeVersion: 3.2,
+        position: [0, 0] as [number, number],
+        // Without `any` in the data-type list, the repair heuristic read it as an operation name
+        // and rewrote this to {type: "string", operation: "any"} - an operation n8n has no such
+        // thing as - which also hid the genuine missing-operation error (#1097).
+        parameters: { mode: 'rules', rules: { values: [{ conditions: { conditions: [{ operator: { type: 'any' } }] } }] } }
+      } as unknown as WorkflowNode;
+
+      const operator = (sanitizeNode(node).parameters.rules as any).values[0].conditions.conditions[0].operator;
+      expect(operator).toEqual({ type: 'any' });
+    });
+
+    it('should leave a Switch rule entry that is not an object untouched (#1094)', () => {
+      const node = {
+        id: '1', name: 'Switch', type: 'n8n-nodes-base.switch', typeVersion: 3.2,
+        position: [0, 0] as [number, number],
+        // The array matters: spreading it yields {conditions: undefined}, which the validators
+        // no longer recognise as malformed — the repair would launder the bad entry.
+        parameters: { rules: { rules: [null, 'Branch 1', []] } }
+      } as unknown as WorkflowNode;
+
+      const sanitized = sanitizeNode(node);
+
+      // Repairing the entry would hide the malformed payload the validators report.
+      expect((sanitized.parameters.rules as any).rules).toEqual([null, 'Branch 1', []]);
+    });
+  });
+
+  describe('validateNodeMetadata', () => {
+    it('should detect missing conditions.options', () => {
+      const node: WorkflowNode = {
+        id: 'test',
+        name: 'IF Missing Options',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            conditions: []
+            // Missing options
+          }
+        }
+      };
+
+      const issues = validateNodeMetadata(node);
+
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues[0]).toBe('Missing conditions.options');
+    });
+
+    it('should detect missing operator.type', () => {
+      const node: WorkflowNode = {
+        id: 'test',
+        name: 'IF Bad Operator',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            options: {
+              version: 2,
+              leftValue: '',
+              caseSensitive: true,
+              typeValidation: 'strict'
+            },
+            conditions: [
+              {
+                id: 'cond1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  operation: 'equals'
+                  // Missing type
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const issues = validateNodeMetadata(node);
+
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.some(issue => issue.includes("missing required field 'type'"))).toBe(true);
+    });
+
+    it('should detect invalid operator.type value', () => {
+      const node: WorkflowNode = {
+        id: 'test',
+        name: 'IF Invalid Type',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            options: {
+              version: 2,
+              leftValue: '',
+              caseSensitive: true,
+              typeValidation: 'strict'
+            },
+            conditions: [
+              {
+                id: 'cond1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'isNotEmpty', // WRONG: operation name, not data type
+                  operation: 'isNotEmpty'
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const issues = validateNodeMetadata(node);
+
+      expect(issues.some(issue => issue.includes('invalid type "isNotEmpty"'))).toBe(true);
+    });
+
+    it('ignores an array entry under "values", as the other validators do', () => {
+      const node = {
+        id: '1', name: 'Switch', type: 'n8n-nodes-base.switch', typeVersion: 3.2,
+        position: [0, 0] as [number, number],
+        // typeof [] === 'object', so an array slips a plain typeof check; the condition
+        // validator names it precisely, so reporting missing options here is noise (#1097).
+        parameters: { rules: { values: [[]] } }
+      } as unknown as WorkflowNode;
+
+      expect(validateNodeMetadata(node)).toEqual([]);
+    });
+
+    it('accepts n8n\'s "any" operator type, as validateOperatorStructure does', () => {
+      const node = {
+        id: '1', name: 'Switch', type: 'n8n-nodes-base.switch', typeVersion: 3.2,
+        position: [0, 0] as [number, number],
+        parameters: {
+          rules: {
+            values: [{
+              outputKey: 'exists',
+              conditions: {
+                options: { version: 2, leftValue: '', caseSensitive: true, typeValidation: 'strict' },
+                conditions: [{
+                  leftValue: '={{ $json.x }}',
+                  operator: { type: 'any', operation: 'exists', singleValue: true }
+                }]
+              }
+            }]
+          }
+        }
+      } as unknown as WorkflowNode;
+
+      expect(validateNodeMetadata(node)).toEqual([]);
+    });
+
+    it('should detect missing singleValue for unary operators', () => {
+      const node: WorkflowNode = {
+        id: 'test',
+        name: 'IF Missing SingleValue',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            options: {
+              version: 2,
+              leftValue: '',
+              caseSensitive: true,
+              typeValidation: 'strict'
+            },
+            conditions: [
+              {
+                id: 'cond1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'string',
+                  operation: 'notEmpty'
+                  // Missing singleValue: true
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const issues = validateNodeMetadata(node);
+
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.some(issue => issue.includes('requires singleValue: true'))).toBe(true);
+    });
+
+    it('should detect singleValue on binary operators', () => {
+      const node: WorkflowNode = {
+        id: 'test',
+        name: 'IF Binary with SingleValue',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            options: {
+              version: 2,
+              leftValue: '',
+              caseSensitive: true,
+              typeValidation: 'strict'
+            },
+            conditions: [
+              {
+                id: 'cond1',
+                leftValue: '={{ $json.value }}',
+                rightValue: 'test',
+                operator: {
+                  type: 'string',
+                  operation: 'equals',
+                  singleValue: true  // WRONG: equals is binary
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const issues = validateNodeMetadata(node);
+
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.some(issue => issue.includes('should not have singleValue: true'))).toBe(true);
+    });
+
+    it('should return empty array for valid node', () => {
+      const node: WorkflowNode = {
+        id: 'test',
+        name: 'Valid IF',
+        type: 'n8n-nodes-base.if',
+        typeVersion: 2.2,
+        position: [0, 0],
+        parameters: {
+          conditions: {
+            options: {
+              version: 2,
+              leftValue: '',
+              caseSensitive: true,
+              typeValidation: 'strict'
+            },
+            conditions: [
+              {
+                id: 'cond1',
+                leftValue: '={{ $json.value }}',
+                rightValue: '',
+                operator: {
+                  type: 'string',
+                  operation: 'notEmpty',
+                  singleValue: true
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const issues = validateNodeMetadata(node);
+
+      expect(issues).toEqual([]);
+    });
+  });
+});

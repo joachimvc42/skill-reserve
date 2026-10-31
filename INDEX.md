@@ -175,6 +175,93 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/firecrawl-claude-plugin/skills/read-docs` | Read official library, SDK, and API docs for setup, code examples, migrations, compatibility, or library-specific errors when supplied code or documentation does not answer the question. |
 | `skills/firecrawl-claude-plugin/skills/seo-audit` | Inspect named pages for SEO metadata, headings, canonicals, schema, and link issues. Use for source-backed SEO audits and prioritized fixes; distinguish unverified checks from observed defects. |
 
+## Skills : remotion
+
+| Skill | Description |
+|---|---|
+| `skills/remotion/skills/remotion-best-practices` | Router for all Remotion skills |
+| `skills/remotion/skills/remotion-captions` | Transcribing, displaying and animating captions |
+| `skills/remotion/skills/remotion-create` | Create a new Remotion video |
+| `skills/remotion/skills/remotion-docs` | Search Remotion documentation |
+| `skills/remotion/skills/remotion-interactivity` | Structure Remotion markup for interactivity |
+| `skills/remotion/skills/remotion-maps` | Remotion Map animation knowledge |
+| `skills/remotion/skills/remotion-markup` | Content, animation and effects best practices |
+| `skills/remotion/skills/remotion-multimedia` | Interacting with Mediabunny |
+| `skills/remotion/skills/remotion-render` | Export a Remotion video |
+| `skills/remotion/skills/remotion-saas` | Build an app with Remotion |
+| `skills/remotion/skills/remotion-studio` | Preview a Remotion video |
+| `skills/remotion/skills/remotion-upgrade` | Upgrade Remotion, and related packages |
+
+## Skills : agent-browser
+
+| Skill | Description |
+|---|---|
+| `skills/agent-browser/.agents/skills/technical-writer` | Write, review, and edit developer documentation for SDKs, libraries, and frameworks, including sites such as agent-browser.dev and portless.sh. Use for getting-started guides, tutorials, API references, conceptual exp… |
+| `skills/agent-browser/skill-data/agentcore` | Run agent-browser on AWS Bedrock AgentCore cloud browsers. Use when the user wants to use AgentCore, run browser automation on AWS, use a cloud browser with AWS credentials, or needs a managed browser session backed b… |
+| `skills/agent-browser/skill-data/core` | Core agent-browser usage guide. Read this before running any agent-browser commands. Covers the snapshot-and-ref workflow, navigating pages, interacting with elements (click, fill, type, select), extracting text and d… |
+| `skills/agent-browser/skill-data/derive-client` | Reverse-engineer a website's internal API by recording browser traffic into a HAR file, then generate a standalone client or CLI that calls the endpoints directly, with no browser needed after the first recording. Use… |
+| `skills/agent-browser/skill-data/dogfood` | Systematically explore and test a web application to find bugs, UX issues, and other problems. Use when asked to "dogfood", "QA", "exploratory test", "find issues", "bug hunt", "test this app/site/platform", or review… |
+| `skills/agent-browser/skill-data/electron` | Automate Electron desktop apps (VS Code, Slack, Discord, Figma, Notion, Spotify, etc.) using agent-browser via Chrome DevTools Protocol. Use when the user needs to interact with an Electron app, automate a desktop app… |
+| `skills/agent-browser/skill-data/protected-vercel-deployments` | Access and test Vercel deployments protected by Vercel Authentication, SSO, or Deployment Protection with agent-browser. Use when a preview or production URL redirects to a Vercel login page, returns a protection 401 … |
+| `skills/agent-browser/skill-data/slack` | Interact with Slack workspaces using browser automation. Use when the user needs to check unread channels, navigate Slack, send messages, extract data, find information, search conversations, or automate any Slack tas… |
+| `skills/agent-browser/skill-data/vercel-sandbox` | Run agent-browser + Chrome inside Vercel Sandbox microVMs for browser automation from any Vercel-deployed app. Use when the user needs browser automation in a Vercel app (Next.js, SvelteKit, Nuxt, Remix, Astro, etc.),… |
+| `skills/agent-browser/skill-data/webmcp-gen` | Build and validate experimental WebMCP tools for an existing web page. Use when an agent needs to expose a site's real workflows as page tools, create webmcp.init.js, define deterministic checks, or compare WebMCP wit… |
+| `skills/agent-browser/skills/agent-browser` | Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automatin… |
+
+## Skills : claude-blog
+
+| Skill | Description |
+|---|---|
+| `skills/claude-blog/brain` | Scaffold and operate Claude Blog Brain, a source-cited Obsidian brain for blog content creation, optimization, and management dual-optimized for Google rankings (E-E-A-T, the 2026 core updates) and AI citations (GEO/A… |
+| `skills/claude-blog/skills/blog` | Full-lifecycle blog engine with 31 sub-skills, 12 templates, 100-point scoring, and 5 agents. Routes requests to the right sub-skill: writing, rewriting, analysis, outlines, audits, schema, charts, images, repurposing… |
+| `skills/claude-blog/skills/blog-analyze` | Score one blog post (or a folder of posts) on a 5-category 100-point scale covering content quality, SEO, E-E-A-T, technical elements, and AI citation readiness. Runs the deterministic analyzer first, then adds judgme… |
+| `skills/claude-blog/skills/blog-audio` | Paid Gemini TTS audio for a finished blog post: summary, full read-aloud, or two-speaker dialogue, with an MP3 and an HTML5 embed. Asks for explicit consent before the first paid call. Runs only on an explicit request… |
+| `skills/claude-blog/skills/blog-audit` | Full-site blog health assessment scanning all blog files for quality scores, orphan pages, topic cannibalization, stale content, and AI citation readiness. Runs canonical batch analysis before site-wide checks. Produc… |
+| `skills/claude-blog/skills/blog-brand` | Establish durable brand and voice context for cross-skill consumption. Generates BRAND.md (audience, positioning, do/don't editorial rules, taboo phrases, competitor differentiation) and VOICE.md (existing persona JSO… |
+| `skills/claude-blog/skills/blog-brief` | Create a content brief for ONE planned post: target and secondary keywords, search intent, template choice, competitor gaps from the live SERP, sourced statistics to include, section plan, internal-link targets, and d… |
+| `skills/claude-blog/skills/blog-calendar` | Build a dated monthly or quarterly editorial calendar: which posts to publish or review when, content mix, templates, distribution timing, and a material-change review queue. Use when the user says "editorial calendar… |
+| `skills/claude-blog/skills/blog-cannibalization` | Detect keyword cannibalization across blog posts by extracting primary keywords from titles and headings, clustering semantically similar targets, and flagging posts competing for the same search intent. Supports a fr… |
+| `skills/claude-blog/skills/blog-chart` | Internal capability, not user-invocable: the orchestrator calls it while running blog-write or blog-rewrite to turn research data into dark-mode compatible inline SVG charts (horizontal bar, grouped bar, donut, line, … |
+| `skills/claude-blog/skills/blog-cluster` | Semantic topic cluster planning and automated execution engine for claude-blog. Performs SERP-based keyword research, groups keywords by search intent and SERP overlap, builds a hub-and-spoke cluster architecture, gen… |
+| `skills/claude-blog/skills/blog-decay` | Compare two Google Search Console page exports (current vs previous period) to flag pages whose clicks or impressions fell by a chosen threshold, with a triage hint (refresh, query shift, consolidate, prune). The 20% … |
+| `skills/claude-blog/skills/blog-discourse` | Research what people are actually saying about a topic in the last 30 days across Reddit, X / Twitter, YouTube, Hacker News, dev.to, Medium, and other public discourse platforms. API-free; uses WebSearch with platform… |
+| `skills/claude-blog/skills/blog-factcheck` | Verify statistics and claims in blog posts by fetching cited source URLs and checking if the claimed data actually appears on the page. Extracts all load-bearing claims (statistics, product or policy claims, ranking a… |
+| `skills/claude-blog/skills/blog-flow` | FLOW framework integration for bloggers. Evidence-led content workflow using the Find, Optimize, Win loop with stage-specific AI prompts from the FLOW knowledge base (30 blog-applicable prompts, adapted from FLOW unde… |
+| `skills/claude-blog/skills/blog-geo` | Audit one blog post file for AI-citation readiness (self-contained, sourced passages, entity clarity, structure, crawler access) and score it with an internal 0-100 heuristic plus per-surface notes for AI Overviews, A… |
+| `skills/claude-blog/skills/blog-google` | Credentialed Google API calls for a blog: PageSpeed Insights, CrUX history, Search Console performance and URL Inspection, GA4 organic traffic, Cloud NLP entities, YouTube video search, Google Ads Keyword Planner, and… |
+| `skills/claude-blog/skills/blog-image` | Paid Gemini image generation for blog heroes, inline illustrations, and OG cards (direct API by default, optional MCP for edits). Asks for explicit consent before the first paid call. Runs only on an explicit request:… |
+| `skills/claude-blog/skills/blog-locale-audit` | Read-only audit of a folder of existing multilingual blog posts: translation coverage, parity, hreflang and canonical consistency, meta-tag parity, and stale translations, with a prioritized report. Use when the user … |
+| `skills/claude-blog/skills/blog-localize` | Deep cultural adaptation of an already translated blog post for one target market: local examples, CTAs, legal references, statistic sources, and formality (Sie/du, tu/vous). Built-in profiles for DACH, Francophone, H… |
+| `skills/claude-blog/skills/blog-multilingual` | One-command multilingual blog creation. Writes a blog post, translates it into user-specified languages, applies cultural adaptation, and emits hreflang tags, sitemap entries, and a CMS-ready language map. The complet… |
+| `skills/claude-blog/skills/blog-notebooklm` | Query a user's Gemini Notebook (formerly NotebookLM) for source-grounded answers through a logged-in browser session on their Google account. Uses the account's usage limits and writes browser state. Runs only on an e… |
+| `skills/claude-blog/skills/blog-outline` | SERP-informed outline generation with H2/H3 heading hierarchy, competitive content gap analysis, section-by-section word count targets, chart and image placement markers, optional FAQ question planning, and internal l… |
+| `skills/claude-blog/skills/blog-persona` | Create and manage writing personas with NNGroup 4-dimension tone framework (Funny-Serious, Formal-Casual, Respectful-Irreverent, Enthusiastic-Matter-of-fact). Personas define readability targets, sentence length distr… |
+| `skills/claude-blog/skills/blog-repurpose` | Turn an existing blog post into draft text for other channels: X threads, LinkedIn posts, Threads/Bluesky, short-video scripts, YouTube scripts, Reddit posts, newsletter excerpts, podcast scripts. Saves drafts to file… |
+| `skills/claude-blog/skills/blog-rewrite` | Rewrite and optimize existing blog posts for Google SEO (May 2026 Core Update, E-E-A-T) and AI citation visibility as one SEO discipline. For AI-citation-only audit (no Google work), use blog-geo instead. Replaces fab… |
+| `skills/claude-blog/skills/blog-schema` | Generate JSON-LD for ONE blog post (BlogPosting with Person, Organization, BreadcrumbList, ImageObject, VideoObject; FAQPage only as optional entity markup) in a single @graph, and check it against Google's current st… |
+| `skills/claude-blog/skills/blog-seo-check` | Post-writing SEO validation with pass/fail checklist covering title tag length and keyword placement, meta description quality, heading hierarchy and keyword density, internal/external link audit with anchor text anal… |
+| `skills/claude-blog/skills/blog-strategy` | Build a blog-level strategy for a niche or business: audience segments, 3-5 content pillars with hub-and-spoke clusters, competitive gaps, measurement plan, and a 90-day roadmap. Use when the user says "blog strategy"… |
+| `skills/claude-blog/skills/blog-style` | Measure writing-style statistics (sentence length, vocabulary, transitions, phrasing) from 5 to 10 posts you or your client wrote, and produce a voice profile for VOICE.md, blog-persona, and blog-write. Use for "learn… |
+| `skills/claude-blog/skills/blog-taxonomy` | Suggest tags and categories for a blog post from its content, audit a site's tag and category health, and, only after the user approves a shown plan, sync tags and categories to WordPress, Shopify, Ghost, Strapi, or S… |
+| `skills/claude-blog/skills/blog-translate` | Translate existing blog posts into one or more target languages with SEO-optimized localization. Produces native-quality translations that preserve markdown structure, frontmatter, schema JSON-LD, image and chart embe… |
+| `skills/claude-blog/skills/blog-write` | Write a new blog article from scratch for Google rankings and AI citations, then take it through the delivery gates. Generates the full article with template selection, answer-first formatting, Key Takeaways box, sour… |
+
+## Skills : founder-skill
+
+| Skill | Description |
+|---|---|
+| `skills/founder-skill/skills/founder-board` | Your board of directors. Puts a business idea in front of a three-member board, each a sub-agent reading the idea through one published framework: the Offers lens (from Alex Hormozi's $100M Offers), the Monopoly lens … |
+| `skills/founder-skill/skills/founder-brand` | Your brand designer. Names the business (with the trademark, domain and handle checks to run before falling in love with a name), writes the voice, a one-line promise and a tagline, and briefs the look: colours, type,… |
+| `skills/founder-skill/skills/founder-cfo` | Your CFO. Builds the unit economics of a business before money is spent: what one unit earns after its direct costs, the real profit margin at the planned volume, the break-even point in units a day, year 1 month by m… |
+| `skills/founder-skill/skills/founder-competitors` | Maps every competitor and the gap they leave. Finds the direct competitors, indirect ones and the substitutes a buyer would use instead, from public sources only, and records what each sells, at what price, how they p… |
+| `skills/founder-skill/skills/founder-consumer` | The consumer panel. Spins up a swarm of buyer sub-agents (default 100, --quick for 20) trained on the user's target customer, each with a different income, age, buying behaviour and objection, shows every one the same… |
+| `skills/founder-skill/skills/founder-launch` | Your launch lead. Builds a dated, step-by-step launch plan: a cheap real-world test first (a waitlist, a pre-sale or a pop-up with a real price, so real buyers confirm what the simulated panel said), then the countdow… |
+| `skills/founder-skill/skills/founder-marketing` | Your marketing director. Turns the buyer panel and the competitor map into positioning, the channels the target customer actually uses, a 30-day launch campaign with dated posts and ads, the first ten hooks, a budget … |
+| `skills/founder-skill/skills/founder-offer` | Builds an offer too good to refuse. Lists every problem the buyer hits on the way to the result they want, turns each into a solution, trims to what is cheap to deliver and valuable to the buyer, and stacks it with ho… |
+| `skills/founder-skill/skills/founder-ops` | Your operations manager. Works out how the business actually runs on day one: suppliers and what they cost, who works when, the step-by-step routines for opening, serving or shipping and closing, the tools to run it, … |
+| `skills/founder-skill/skills/founder-plan` | Your business planner. Compiles everything the other founder skills wrote (the board's verdict, the competitors, the buyer panel, pricing, the offer, the CFO's numbers, marketing, brand, operations and the launch plan… |
+| `skills/founder-skill/skills/founder-pricing` | Finds the price buyers will actually pay. Reads the consumer panel's four price answers per buyer into a Van Westendorp price-sensitivity range (too cheap, a bargain, getting expensive, too expensive), sets it against… |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

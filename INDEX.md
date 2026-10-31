@@ -12,6 +12,71 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `references/ecc-extras/commands/` | Slash commands ECC, installables dans `.claude/commands/` |
 | `references/ecc-extras/rules/` | Règles de codage ECC par langage |
 
+## Skills : humanizer
+
+| Skill | Description |
+|---|---|
+| `skills/humanizer` | Rewrite AI-sounding text so it reads like the writer without changing what it says. Use when editing or reviewing prose for AI tells: not-X-but-Y contrasts, one-line closers, staged openers, forced triads, dashes ever… |
+
+## Skills : ai-marketing
+
+| Skill | Description |
+|---|---|
+| `skills/ai-marketing/market` | AI Marketing Suite — Main Orchestrator — You are a comprehensive AI marketing analysis and content generation system for Claude Code. You help entrepreneurs, agency builders, and solopreneurs analyze websites, generat… |
+| `skills/ai-marketing/skills/market-ads` | Ad Creative & Copy Generation — You are the advertising engine for `/market ads <url>`. You generate complete ad campaigns across platforms with full copy variations, audience targeting strategies, budget recommendati… |
+| `skills/ai-marketing/skills/market-audit` | Marketing Audit Orchestrator — You are the full marketing audit engine for `/market audit <url>`. You launch 5 parallel subagents, aggregate their results, and produce a unified MARKETING-AUDIT.md report that is clien… |
+| `skills/ai-marketing/skills/market-brand` | Brand Voice Analysis and Guidelines Generation — Analyze a brand's voice, tone, and messaging across all available channels and generate a comprehensive brand voice guidelines document. This skill examines how a brand… |
+| `skills/ai-marketing/skills/market-competitors` | Competitive Intelligence Analysis — You are the competitive intelligence engine for `/market competitors <url>`. You identify competitors, analyze their marketing strategies, and produce a comprehensive comparison rep… |
+| `skills/ai-marketing/skills/market-copy` | Copywriting Analysis & Generation — You are the copywriting engine for `/market copy <url>`. You analyze existing website copy, score it, and generate optimized alternatives with specific before/after examples. Every … |
+| `skills/ai-marketing/skills/market-emails` | Email Sequence Generation — You are the email marketing engine for `/market emails <topic/url>`. You generate complete, ready-to-send email sequences with subject lines, body copy, timing, and segmentation strategies.… |
+| `skills/ai-marketing/skills/market-funnel` | Sales Funnel Analysis & Optimization — You are the funnel analysis engine for `/market funnel <url>`. You map the complete conversion path from first visit to purchase, identify drop-off points, quantify friction, and… |
+| `skills/ai-marketing/skills/market-landing` | Landing Page CRO Analysis — Perform a comprehensive Conversion Rate Optimization (CRO) analysis on any landing page. This skill produces a section-by-section teardown with prioritized, actionable fixes that directly i… |
+| `skills/ai-marketing/skills/market-launch` | Product/Service Launch Playbook Generator — Generate a complete, week-by-week launch playbook for any product, service, or feature launch. This skill produces a tactical plan with templates, checklists, email sequence… |
+| `skills/ai-marketing/skills/market-proposal` | Client Proposal Generator for Marketing Services — Generate a professional, client-ready marketing services proposal. This skill produces a complete proposal document that positions the agency/consultant as the clear … |
+| `skills/ai-marketing/skills/market-report` | Marketing Report Generator (Markdown Format) — Generate a comprehensive, professionally formatted marketing report in Markdown. This skill compiles data from all previous audit and analysis results into a single, clie… |
+| `skills/ai-marketing/skills/market-report-pdf` | PDF Marketing Report Generator — Generate a professional, visually polished PDF marketing report using the Python script `scripts/generate_pdf_report.py`. This skill collects all available audit and analysis data, str… |
+| `skills/ai-marketing/skills/market-seo` | SEO Content Audit — Perform a comprehensive SEO audit of a webpage or website, covering on-page SEO, content quality (E-E-A-T), keyword analysis, technical SEO, and content strategy. This skill combines automated anal… |
+| `skills/ai-marketing/skills/market-social` | Social Media Content Calendar & Generation — You are the social media engine for `/market social <topic/url>`. You generate a complete 30-day content calendar with platform-specific posts, hooks, hashtags, and a conte… |
+
+## Skills : claude-ads
+
+| Skill | Description |
+|---|---|
+| `skills/claude-ads/ads` | Operate professional paid advertising across Google, Meta, YouTube, LinkedIn, TikTok, Microsoft, Apple, Amazon, Reddit, Pinterest, Snapchat, and X. Use for account intake, source-grounded audits, strategy, budget and … |
+| `skills/claude-ads/skills/ads-amazon` | Audit Amazon Ads profiles, regions, Sponsored Products, Sponsored Brands, Sponsored Display, DSP, portfolios, targeting, search terms, retail readiness, creative, budgets, ACOS, TACOS, reporting, and policy. Use for A… |
+| `skills/claude-ads/skills/ads-apple` | Audit Apple Ads measurement, AdServices and AdAttributionKit, campaign and keyword structure, Search Match, App Store placements, custom product pages, bidding, budgets, MMP reconciliation, and policy. Use for Apple A… |
+| `skills/claude-ads/skills/ads-attribution` | Audit cross-platform attribution, conversion definitions, reporting windows, GA4, AdServices and AdAttributionKit, MMPs, browser and server events, offline conversions, and platform reconciliation. Use for attribution… |
+| `skills/claude-ads/skills/ads-audit` | Run a source-grounded paid-advertising audit for one or more of Google, Meta, YouTube, LinkedIn, TikTok, Microsoft, Apple, Amazon, Reddit, Pinterest, Snapchat, and X. Use for full ad checks, account health reviews, pa… |
+| `skills/claude-ads/skills/ads-budget` | Plan and review paid-media budgets, bidding, pacing, marginal return, targets, constraints, and allocation across supported platforms. Use for ad budget allocation, media budget, bidding strategy, scaling, spend pacin… |
+| `skills/claude-ads/skills/ads-competitor` | Research competitor paid-ad presence, messaging, creative, formats, landing pages, keyword and auction signals, transparent ad libraries, and strategic gaps across supported platforms. Use for competitor ads, ad libra… |
+| `skills/claude-ads/skills/ads-create` | Create source-grounded paid-ad campaign concepts, messaging, copy, creative briefs, and production plans from a validated brand profile, campaign objective, platform requirements, and optional audit evidence. Triggers… |
+| `skills/claude-ads/skills/ads-creative` | Audit paid-ad copy, images, video, hooks, concepts, format coverage, platform-native fit, message match, creative fatigue, accessibility, and policy across supported platforms. Use for creative audit, ad creative, cre… |
+| `skills/claude-ads/skills/ads-dna` | Extract a public-safe brand and offer profile for paid advertising from an authorized website and operator input. Triggers on: brand DNA, brand profile, brand identity, brand style, brand colors, brand voice, visual i… |
+| `skills/claude-ads/skills/ads-generate` | Generate paid-ad image assets from a validated creative brief and brand profile using an explicitly configured image provider. Triggers on: generate ads, generate ad images, create ad creatives, create ad images, make… |
+| `skills/claude-ads/skills/ads-google` | Audit Google Ads measurement, Search, Shopping, Performance Max, Demand Gen, YouTube-linked inventory, keywords and search terms, negative-keyword generation or review, creative assets, bidding, budgets, settings, and… |
+| `skills/claude-ads/skills/ads-landing` | Audit paid-ad landing pages for message match, mobile experience, performance, accessibility, trust, forms, consent, tracking, security, and conversion friction. Use for landing-page audit, post-click experience, LP a… |
+| `skills/claude-ads/skills/ads-launch` | Draft or explicitly apply a paid-ad campaign launch through Claude Ads capability-gated adapters. Use for campaign creation, launch plans, publishing ads, activating campaigns, uploading creative, or requests to push … |
+| `skills/claude-ads/skills/ads-linkedin` | Audit LinkedIn Ads measurement, Insight Tag and conversions, professional audiences, lead generation, ABM, creative, bidding, budgets, pacing, automation, and policy. Use for LinkedIn Ads, Campaign Manager, Insight Ta… |
+| `skills/claude-ads/skills/ads-math` | Calculate and model paid-media CPA, CPL, CPC, CPM, ROAS, MER, break-even targets, contribution margin, LTV:CAC, impression-share opportunity, budgets, forecasts, and experiment economics. Use for PPC math, ad calculat… |
+| `skills/claude-ads/skills/ads-meta` | Audit Meta Ads measurement, Pixel and Events Manager, attribution, Facebook and Instagram creative, audiences, placements, automation, budgets, account structure, and policy. Use for Meta Ads, Facebook Ads, Instagram … |
+| `skills/claude-ads/skills/ads-microsoft` | Audit Microsoft Advertising measurement, UET, search and audience campaigns, Google imports, syndication, keywords, creative, bidding, budgets, Copilot inventory, and policy. Use for Microsoft Ads, Bing Ads, UET, Micr… |
+| `skills/claude-ads/skills/ads-monitor` | Monitor paid-ad account pacing, delivery, performance, creative fatigue, tracking, policy, and data quality across supported platforms. Use for daily or weekly checks, anomaly review, budget pacing, post-launch verifi… |
+| `skills/claude-ads/skills/ads-optimize` | Diagnose and draft or explicitly apply paid-ad optimizations using evidence, financial constraints, experiments, and capability-gated adapters. Use for campaign optimization, budget reallocation, bid changes, pausing … |
+| `skills/claude-ads/skills/ads-photoshoot` | Generate rights-cleared paid-ad product photography variants from an authorized source image and validated brand profile. Triggers on: product photo, product photography, virtual photoshoot, photoshoot, enhance produc… |
+| `skills/claude-ads/skills/ads-pinterest` | Audit Pinterest Ads measurement, Pinterest Tag and Conversions API, catalog and shopping readiness, visual creative, audiences, Performance+ intent, budgets, brand safety, and reporting. Use for Pinterest Ads, promote… |
+| `skills/claude-ads/skills/ads-plan` | Create a professional paid-advertising strategy covering objectives, economics, platform selection, campaign architecture, audiences, budget, creative, measurement, experiments, governance, rollout, and reporting. Use… |
+| `skills/claude-ads/skills/ads-reddit` | Audit Reddit Ads measurement, campaign structure, community and interest targeting, creative-native fit, catalog advertising, budgets, brand safety, and reporting. Use for Reddit Ads, conversation ads, community targe… |
+| `skills/claude-ads/skills/ads-report` | Render Markdown, HTML, or PDF paid-advertising reports from a validated Claude Ads JSON run bundle. Use for ads report, client report, audit PDF, executive audience reporting, or exporting prior audit and plan results. |
+| `skills/claude-ads/skills/ads-research` | Refresh Claude Ads platform, API, policy, regulation, benchmark, issue, pull-request, fork, and repository evidence. Use for ads research refresh, expired refresh_due dates, stale API or platform claims, reverify-or-d… |
+| `skills/claude-ads/skills/ads-server-side-tracking` | Audit server-side paid-media measurement including server-side tag management, platform conversion APIs, event taxonomy, browser/server deduplication, consent, hashing, data quality, observability, and privacy. Use fo… |
+| `skills/claude-ads/skills/ads-setup` | Set up a paid-media client, account, data-source, privacy, and mutation-guardrail profile for Claude Ads. Use for onboarding, initial configuration, API tokens or credential profiles, environment-variable or keychain … |
+| `skills/claude-ads/skills/ads-snapchat` | Audit Snapchat Ads measurement, Snap Pixel and Conversions API, mobile and app campaigns, creative, AR and catalog formats, audiences, budgets, brand safety, and reporting. Use for Snapchat Ads, Snap Ads, Snap Pixel, … |
+| `skills/claude-ads/skills/ads-test` | Design and evaluate paid-ad experiments with hypotheses, randomization units, sample-size and duration assumptions, guardrails, platform experiment tools, analysis, and decision rules. Use for A/B test, split test, ex… |
+| `skills/claude-ads/skills/ads-tiktok` | Audit TikTok Ads measurement, Pixel, mobile-first creative, audiences, Smart+, Shop and commerce campaigns, bidding, budgets, pacing, attribution, and policy. Use for TikTok Ads, TikTok Pixel, Smart+, TikTok Shop Ads,… |
+| `skills/claude-ads/skills/ads-validate` | Validate Claude Ads contracts, scoring inputs, run bundles, capabilities, source freshness, safety, installation, uninstall, or release readiness. Use for ads validate, ads status, ads next, maturity checks, ownership… |
+| `skills/claude-ads/skills/ads-x` | Audit X Ads measurement, X Pixel and Conversions API, campaign objectives, keyword and conversation targeting, creative, budgets, brand safety, app measurement, and reporting. Use for X Ads, Twitter Ads, promoted post… |
+| `skills/claude-ads/skills/ads-youtube` | Audit YouTube Ads campaign setup, video inventory, Shorts, in-stream, CTV, creative, audiences, brand safety, bidding, and measurement. Use for YouTube Ads, video ads, pre-roll, bumper ads, skippable in-stream, Shorts… |
+
 ## Skills : brag
 
 | Skill | Description |

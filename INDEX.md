@@ -67,6 +67,86 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/platform-design/skills/watchos` | Apple Human Interface Guidelines for Apple Watch. Use when building watchOS apps, complications, or workout features. Triggers on tasks involving Watch UI, Digital Crown, glanceable interfaces, or wrist-based interact… |
 | `skills/platform-design/skills/web` | Web platform design and accessibility guidelines. Use when building web interfaces, auditing accessibility, implementing responsive layouts, or reviewing web UI code. Triggers on tasks involving HTML, CSS, web compone… |
 
+## Skills : superpowers
+
+| Skill | Description |
+|---|---|
+| `skills/superpowers/skills/brainstorming` | You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation). |
+| `skills/superpowers/skills/diagnosing-superpowers` | Use when a superpowers session went wrong and your human partner wants to know why — repeated work, ignored plans, stumbles, poor results, a skill that didn't fire, "it took too long", "why is it so expensive", "what … |
+| `skills/superpowers/skills/dispatching-parallel-agents` | Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies |
+| `skills/superpowers/skills/executing-plans` | Use when executing an implementation plan in the current session as the implementer yourself — your human partner chose inline execution, or no subagent tool is available |
+| `skills/superpowers/skills/finishing-a-development-branch` | Use when implementation is complete, all tests pass, and you need to decide how to integrate the work |
+| `skills/superpowers/skills/receiving-code-review` | Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or bli… |
+| `skills/superpowers/skills/requesting-code-review` | Use when completing tasks, implementing major features, or before merging to verify work meets requirements |
+| `skills/superpowers/skills/subagent-driven-development` | Use when executing implementation plans with independent tasks in the current session |
+| `skills/superpowers/skills/systematic-debugging` | Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes |
+| `skills/superpowers/skills/test-driven-development` | Use when implementing any feature or bugfix, before writing implementation code |
+| `skills/superpowers/skills/using-git-worktrees` | Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback |
+| `skills/superpowers/skills/using-superpowers` | Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions |
+| `skills/superpowers/skills/verification-before-completion` | Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertion… |
+| `skills/superpowers/skills/writing-plans` | Use when you have a spec or requirements for a multi-step task, before touching code |
+| `skills/superpowers/skills/writing-skills` | Use when creating new skills, editing existing skills, or verifying skills work before deployment |
+
+## Skills : firecrawl
+
+| Skill | Description |
+|---|---|
+| `skills/firecrawl/skills/build/firecrawl-build` | Integrate Firecrawl into application code whenever a product, agent, or workflow needs web data inside the app — web search, live search results, page scraping, structured extraction, or browser interaction. Use when … |
+| `skills/firecrawl/skills/build/firecrawl-build-interact` | Integrate Firecrawl `/interact` into product code for dynamic pages and browser actions after scraping. Use when a feature needs clicks, form fills, pagination, authentication-aware flows, or other multi-step interact… |
+| `skills/firecrawl/skills/build/firecrawl-build-onboarding` | Get Firecrawl credentials and SDK setup into a project. Use when an application needs `FIRECRAWL_API_KEY`, when an agent should add Firecrawl to `.env`, when the user wants to authenticate Firecrawl for app code, or w… |
+| `skills/firecrawl/skills/build/firecrawl-build-scrape` | Integrate Firecrawl `/scrape` into product code for single-page extraction. Use when an app already has a URL and needs markdown, HTML, links, screenshots, metadata, or structured page output. Prefer this skill over b… |
+| `skills/firecrawl/skills/build/firecrawl-build-search` | Integrate Firecrawl `/search` into product code and agent workflows. Use when an app needs discovery before extraction, when the feature starts with a query instead of a URL, or when the system should search the web a… |
+| `skills/firecrawl/skills/core/firecrawl` | Any live-web task via the Firecrawl CLI — including ordinary web research: searching the web, reading or extracting pages, gathering sources, discovering site URLs, bulk extraction, downloading a site, change alerts, … |
+| `skills/firecrawl/skills/core/firecrawl-agent` | Autonomously navigate websites and extract structured data across pages. Use when the task requires navigation or no suitable ready-made workflow or data provider covers it. |
+| `skills/firecrawl/skills/core/firecrawl-alexandria` | Find a direct path to structured data through ready-made workflows, data APIs, and indexes. Follow the search skill to discover and inspect tools, then the scrape skill to execute them. |
+| `skills/firecrawl/skills/core/firecrawl-crawl` | Bulk-extract many pages from one site or section. Use for "crawl", "everything under /docs", or content spanning linked pages. |
+| `skills/firecrawl/skills/core/firecrawl-developer-index` | Searches current documentation, release notes, API references and public repository issues for libraries, frameworks, SDKs, APIs and CLI tools with `firecrawl developer`. Use before answering when the user names a ver… |
+| `skills/firecrawl/skills/core/firecrawl-download` | Save a site or section as local files (markdown, screenshots). Use for "download the site", offline docs, or a local copy for reference. |
+| `skills/firecrawl/skills/core/firecrawl-interact` | Drive a live browser on a scraped page: click, fill forms, log in, paginate, infinite-scroll. Use when content requires interaction or a scrape failed or returned incomplete content. |
+| `skills/firecrawl/skills/core/firecrawl-map` | Discover and list a site's URLs, with search filtering. Use for "map the site" or "find the URL for" requests — when the user knows the site but not the exact page, or wants site structure. |
+| `skills/firecrawl/skills/core/firecrawl-monitor` | Alert by webhook/email on web changes — use for "monitor/watch/track/alert me when": recurring checks on known URLs (prefer over repeated one-off scrapes) or web-wide watches for new results (queries + goal). |
+| `skills/firecrawl/skills/core/firecrawl-parse` | Convert a local file (PDF, DOCX, XLSX, HTML, …) to markdown, or answer questions about its content. Use whenever the input is a file path, not a URL. |
+| `skills/firecrawl/skills/core/firecrawl-research-index` | Find the papers that answer a research query in Firecrawl's research paper index — a corpus of paper abstracts whose largest share is biomedical and life-science literature (PubMed, bioRxiv, medRxiv), alongside arXiv … |
+| `skills/firecrawl/skills/core/firecrawl-scrape` | Read a known webpage or execute a discovered workflow or data-provider capability. Use for page content or structured results once the URL or tool is selected. |
+| `skills/firecrawl/skills/core/firecrawl-search` | Find web sources with query-relevant page excerpts and optional full-page content, and discover workflows, data APIs, and indexes. Use for web research or finding structured records, listings, transcripts, and dataset… |
+| `skills/firecrawl/skills/workflows/firecrawl-business-contacts` | Find the published business contacts of companies with Firecrawl, whether the user names them or describes them by type and place: press and media, sales, partnerships and support inboxes, shared business phone number… |
+| `skills/firecrawl/skills/workflows/firecrawl-company-directories` | Extract structured company lists with Firecrawl from any page or site that lists companies: accelerator batches, VC portfolios, member and sponsor lists, marketplaces and app directories, YC, Crunchbase, Product Hunt … |
+| `skills/firecrawl/skills/workflows/firecrawl-competitive-intel` | Monitor competitor pricing, features, changelogs, dashboards, and product changes with Firecrawl. Use for recurring competitive intelligence, pricing tier extraction, feature change tracking, or structured competitor … |
+| `skills/firecrawl/skills/workflows/firecrawl-dashboard-reporting` | Read metrics off web dashboards with Firecrawl browser: public stats, status and transparency pages as well as analytics tools the user is signed in to. Use when the user wants numbers, KPIs or charts from a dashboard… |
+| `skills/firecrawl/skills/workflows/firecrawl-deep-research` | Produce an intensive, cited analytical report: executive summary, multi-angle findings, contrarian views, open questions, and full sources. Use only when the user needs rigorous synthesis of a complex topic (scientifi… |
+| `skills/firecrawl/skills/workflows/firecrawl-demo-walkthrough` | Walk through a product's key flows with Firecrawl browser and produce a structured UX/product walkthrough. Use for signup, onboarding, pricing, docs, dashboard, product demo prep, UX teardown, and first-run experience… |
+| `skills/firecrawl/skills/workflows/firecrawl-fantasy-sports` | Help fantasy players make start/sit, waiver, streaming, trade, draft and keeper decisions using current player news, usage, matchups and their league's scoring. Use for choosing between players, finding pickups, evalu… |
+| `skills/firecrawl/skills/workflows/firecrawl-job-postings` | Find current job postings on employer career pages and job boards. Use when the user asks who's hiring, seeks remote or local jobs, or wants openings matched to their role, skills, experience, or salary preferences. |
+| `skills/firecrawl/skills/workflows/firecrawl-knowledge-base` | Build a knowledge base from web content with Firecrawl. Use for local reference docs, RAG-ready chunks, fine-tuning datasets, documentation mirrors, topic corpora, or LLM-ready markdown organized from web sources. |
+| `skills/firecrawl/skills/workflows/firecrawl-knowledge-ingest` | Export documentation portals, help centers and API reference sites into local markdown or JSON with Firecrawl browser, including pages that render with JavaScript, hide content behind collapsible navigation or paginat… |
+| `skills/firecrawl/skills/workflows/firecrawl-lead-gen` | Find and qualify new prospects with Firecrawl Alexandria people and company data: people by role, seniority, company, industry, size, location or technology, target accounts that match criteria, or the right contacts … |
+| `skills/firecrawl/skills/workflows/firecrawl-lead-research` | Enrich and research the people and companies the user names or supplies with Firecrawl Alexandria data: background on a person, a professional profile URL to look up, whether someone still holds a role, missing column… |
+| `skills/firecrawl/skills/workflows/firecrawl-market-research` | Research markets and companies with Firecrawl using current, cited figures: market size, growth, trends, financials and earnings. Use when the user asks for market research, an industry overview or a comparison of com… |
+| `skills/firecrawl/skills/workflows/firecrawl-qa` | Test a live website with Firecrawl browser and write up what's broken: links, forms, mobile layout, performance and console errors. Use for pre-launch checks, bug hunts or confirming a deployed site works. |
+| `skills/firecrawl/skills/workflows/firecrawl-research-papers` | Find and synthesize research papers, whitepapers, PDFs, technical reports, and academic sources with Firecrawl Research, using semantic paper search, related-paper expansion, and in-body verification over Firecrawl's … |
+| `skills/firecrawl/skills/workflows/firecrawl-seo-audit` | Inspect a website's titles, meta descriptions, headings, canonicals, structured data and internal links for on-page and technical SEO issues. Use for SEO audits, page-source checks, broken-link reviews or comparing pa… |
+| `skills/firecrawl/skills/workflows/firecrawl-shop` | Researches products across retailers and review sites with Firecrawl and recommends what to buy within the user's budget and preferences, with current prices and sources. Use when the user wants to compare products, f… |
+| `skills/firecrawl/skills/workflows/firecrawl-website-design-clone` | Extract an existing website's visual system into DESIGN.md, or collect its existing logo, colors, fonts and homepage messaging for a document. Use for reference-based UI implementation, documenting design patterns, or… |
+| `skills/firecrawl/skills/workflows/firecrawl-workflows` | Run focused Firecrawl workflows for research, documentation lookup, SEO audits, QA, lead discovery and enrichment, business contacts, current jobs, fantasy decisions, brand assets, knowledge bases and website design s… |
+
+## Skills : firecrawl-claude-plugin
+
+| Skill | Description |
+|---|---|
+| `skills/firecrawl-claude-plugin/skills/brand-identity` | Collect a named organization's existing logo, colors, fonts, and homepage messaging for a deck or document. Use for website-derived assets; report sourced links and observed styling. |
+| `skills/firecrawl-claude-plugin/skills/business-contact-research` | Find published organizational emails, phone numbers, and official contact forms for named businesses or local services. Use for sourced business contacts; exclude employee direct details. |
+| `skills/firecrawl-claude-plugin/skills/design` | Extract a reference website's design system into DESIGN.md with tokens, layout, components, and imagery. Use for recreating its visual style or documenting UI patterns. |
+| `skills/firecrawl-claude-plugin/skills/enrich-lead` | Enrich one professional or a supplied list/CSV with role, employer, profile, history, and requested business fields. Use for a named person, professional profile, or existing leads; not prospecting. |
+| `skills/firecrawl-claude-plugin/skills/fantasy-sports` | Research fantasy start/sit, waiver, trade, draft, or keeper decisions using current player news, usage, matchups, and league scoring. Use for roster decisions; do not change rosters or place bets. |
+| `skills/firecrawl-claude-plugin/skills/find-leads` | Find professionals matching role, company, location, or expertise criteria. Use for prospect lists or expert and speaker discovery; return evidence of fit and professional profile links. |
+| `skills/firecrawl-claude-plugin/skills/firecrawl` | Search web sources, read supplied pages, and retrieve structured data with Firecrawl. Use when a request needs current external evidence or source discovery. |
+| `skills/firecrawl-claude-plugin/skills/firecrawl-deep-research` | Investigate questions needing multi-source synthesis: deep dives, comparisons, or find-all lists. Prefer focused workflows for enrichment, prospecting, or docs; not quick lookups or shopping. |
+| `skills/firecrawl-claude-plugin/skills/firecrawl-developer-index` | Investigate library/API implementation, bugs, and version discrepancies using public repository code, issues, and pull requests. Use when official documentation alone is insufficient. |
+| `skills/firecrawl-claude-plugin/skills/firecrawl-research-index` | Find scientific papers, follow citations, and verify claims against paper passages. Use for literature questions, related work, citing papers, references, or questions about a named paper. |
+| `skills/firecrawl-claude-plugin/skills/job-postings` | Find current job postings by role, employer, location, or remote eligibility. Use for who's hiring, job shortlists, and openings matching supplied skills, experience, or pay preferences. |
+| `skills/firecrawl-claude-plugin/skills/read-docs` | Read official library, SDK, and API docs for setup, code examples, migrations, compatibility, or library-specific errors when supplied code or documentation does not answer the question. |
+| `skills/firecrawl-claude-plugin/skills/seo-audit` | Inspect named pages for SEO metadata, headings, canonicals, schema, and link issues. Use for source-backed SEO audits and prioritized fixes; distinguish unverified checks from observed defects. |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

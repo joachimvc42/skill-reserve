@@ -269,6 +269,44 @@ Tout ce qui est ici est **non installé**. Voir `README.md` pour la procédure d
 | `skills/impeccable/.claude/skills/impeccable` | Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, se… |
 | `skills/impeccable/plugin/skills/impeccable` | Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, se… |
 
+## Skills : huashu-design
+
+| Skill | Description |
+|---|---|
+| `skills/huashu-design` | 花叔Design——用HTML做高保真原型、幻灯片、动画、可视化与专家评审。任何新设计100%先出三个方向初稿给用户选（指定风格/品牌也不豁免），选定后才执行。触发词：做原型、PPT、幻灯片、动画、设计风格、评审、做个HTML页面、UI mockup、导出MP4/GIF、做个好看的。生产级Web App/需后端的系统不适用。 |
+
+## Skills : ui-ux-pro-max
+
+| Skill | Description |
+|---|---|
+| `skills/ui-ux-pro-max/.claude/skills/banner-design` | Design banners for social media, ads, website heroes, creative assets, and print. Multiple art direction options with optional generated or supplied visuals. Actions: design, create, generate banner. Platforms: Facebo… |
+| `skills/ui-ux-pro-max/.claude/skills/brand` | Brand voice, visual identity, messaging frameworks, asset management, brand consistency. Activate for branded content, tone of voice, marketing assets, brand compliance, style guides. |
+| `skills/ui-ux-pro-max/.claude/skills/design` | Comprehensive design skill: brand identity, design tokens, UI styling, logo generation (55 styles, Gemini, Atlas Cloud, or MuAPI AI), corporate identity program (50 deliverables, CIP mockups), HTML presentations (Char… |
+| `skills/ui-ux-pro-max/.claude/skills/design-system` | Token architecture, component specifications, and slide generation. Three-layer tokens (primitive→semantic→component), CSS variables, spacing/typography scales, component specs, strategic slide creation. Use for desig… |
+| `skills/ui-ux-pro-max/.claude/skills/slides` | Create strategic HTML presentations with Chart.js, design tokens, responsive layouts, copywriting formulas, and contextual slide strategies. |
+| `skills/ui-ux-pro-max/.claude/skills/ui-styling` | Create beautiful, accessible user interfaces with shadcn/ui components (built on Radix UI + Tailwind), Tailwind CSS utility-first styling, and canvas-based visual designs. Use when building user interfaces, implementi… |
+| `skills/ui-ux-pro-max/.claude/skills/ui-ux-pro-max` | UI/UX design intelligence for web, mobile, and desktop. This skill should be used when designing, building, reviewing, or fixing interfaces, including pages, components, design systems, accessibility, interaction, res… |
+| `skills/ui-ux-pro-max/cli/assets/skills/banner-design` | Design banners for social media, ads, website heroes, creative assets, and print. Multiple art direction options with optional generated or supplied visuals. Actions: design, create, generate banner. Platforms: Facebo… |
+| `skills/ui-ux-pro-max/cli/assets/skills/brand` | Brand voice, visual identity, messaging frameworks, asset management, brand consistency. Activate for branded content, tone of voice, marketing assets, brand compliance, style guides. |
+| `skills/ui-ux-pro-max/cli/assets/skills/design` | Comprehensive design skill: brand identity, design tokens, UI styling, logo generation (55 styles, Gemini, Atlas Cloud, or MuAPI AI), corporate identity program (50 deliverables, CIP mockups), HTML presentations (Char… |
+| `skills/ui-ux-pro-max/cli/assets/skills/design-system` | Token architecture, component specifications, and slide generation. Three-layer tokens (primitive→semantic→component), CSS variables, spacing/typography scales, component specs, strategic slide creation. Use for desig… |
+| `skills/ui-ux-pro-max/cli/assets/skills/slides` | Create strategic HTML presentations with Chart.js, design tokens, responsive layouts, copywriting formulas, and contextual slide strategies. |
+| `skills/ui-ux-pro-max/cli/assets/skills/ui-styling` | Create beautiful, accessible user interfaces with shadcn/ui components (built on Radix UI + Tailwind), Tailwind CSS utility-first styling, and canvas-based visual designs. Use when building user interfaces, implementi… |
+
+## Skills : taste-skill
+
+| Skill | Description |
+|---|---|
+| `skills/taste-skill/skills/taste-skill` | tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, … |
+
+## Skills : playwright-cli
+
+| Skill | Description |
+|---|---|
+| `skills/playwright-cli/.claude/skills/dev` | Development workflows for the playwright-cli repository. Use when the user asks about rolling dependencies, releasing, or other repo maintenance tasks. |
+| `skills/playwright-cli/.claude/skills/playwright-triage` | Triage and fix one microsoft/playwright-cli issue, or do a maintainer's task, unattended inside the Issue triage GitHub Actions workflow (.github/workflows/triage.yml), which a needs-triage, needs-triage-mac or needs-… |
+| `skills/playwright-cli/skills/playwright-cli` | Automate browser interactions, test web pages and work with Playwright tests. |
+
 ## Skills : ai-marketing
 
 | Skill | Description |

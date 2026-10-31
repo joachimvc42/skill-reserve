@@ -23,6 +23,10 @@ Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 | `skills/claude-blog/` | [AgriciDaniel/claude-blog](https://github.com/AgriciDaniel/claude-blog) (dépôt complet) | `3544423` | MIT |
 | `skills/founder-skill/` | [Jakeschincariol/founder-skill](https://github.com/Jakeschincariol/founder-skill) (dépôt complet) | `fd9385b` | MIT |
 | `skills/impeccable/` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (partie Claude Code : `.claude/`, `.claude-plugin/`, `plugin/`, `skill/`, `docs/`) | `df3a4ab` | Apache-2.0 |
+| `skills/huashu-design/` | [alchaincyf/huashu-design](https://github.com/alchaincyf/huashu-design) (dépôt complet) | `9b01ee8` | MIT (stickers de démo : PolyForm Shield) |
+| `skills/ui-ux-pro-max/` | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (dépôt complet) | `9a3f14f` | MIT |
+| `skills/taste-skill/` | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) (dépôt complet) | `12af471` | MIT |
+| `skills/playwright-cli/` | [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli) (dépôt complet) | `faf6bc5` | Apache-2.0 |
 | `skills/ai-marketing/` | [zubair-trabzada/ai-marketing-claude](https://github.com/zubair-trabzada/ai-marketing-claude) (dépôt complet) | `e5aa0ea` | MIT |
 | `skills/claude-ads/` | [AgriciDaniel/claude-ads](https://github.com/AgriciDaniel/claude-ads) (dépôt complet) | `fc3908e` | MIT |
 | `references/ecc-extras/` | [affaan-m/ecc](https://github.com/affaan-m/ecc) (`agents/`, `commands/`, `rules/`) | `b38be6a` | MIT |
@@ -30,6 +34,20 @@ Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 | `references/r3f/` | [AliKhan-Devs/R3F](https://github.com/AliKhan-Devs/R3F) | `61281b5` | voir dépôt d'origine ; modèles 3D : voir `license.txt` de chaque modèle |
 
 Ce qui n'a **pas** été copié depuis ECC, volontairement : ses 54 hooks, ses scripts, son installeur et son code source. Ils sont intrusifs et agissent sur toutes les sessions. Ils restent disponibles dans le dépôt d'origine.
+
+## Kit UI prévu pour le prochain site web
+
+L'utilisateur a demandé ces 5 éléments pour l'interface de son prochain site. Ils sont à installer **dans le dépôt du site**, au démarrage du projet, après confirmation :
+
+| Rôle | Élément | Installation |
+|---|---|---|
+| Direction artistique (avant de coder) | `skills/taste-skill` | copier `skills/taste-skill/skills/taste-skill` dans `.claude/skills/` |
+| Base de règles UI (styles, palettes, typos, UX) | `skills/ui-ux-pro-max` | copier `skills/ui-ux-pro-max/.claude/skills/ui-ux-pro-max` dans `.claude/skills/` (scripts Python, stdlib) |
+| Prototypes HTML et propositions de directions | `skills/huashu-design` | copier le dossier entier dans `.claude/skills/huashu-design` ; `npm install` pour les exports |
+| Critique, audit et polish du code UI | `skills/impeccable` | `npx impeccable install` puis `/impeccable init` |
+| Vérification visuelle dans un vrai navigateur | `skills/playwright-cli` | `npm i -g @playwright/cli` puis copier `skills/playwright-cli/skills/playwright-cli` |
+
+Chevauchements à surveiller : taste-skill, ui-ux-pro-max, huashu-design et impeccable cherchent tous à éviter le « design IA générique ». Ils se complètent (direction artistique → règles → prototype → audit), mais il faut éviter d'en installer d'autres du même type (par exemple `ecc/taste*` ou `ecc/frontend-design-direction`).
 
 ## Procédure (pour Claude)
 
@@ -56,7 +74,11 @@ Pour une API : chercher dans `references/public-apis/README.md` par catégorie o
 - `skills/agent-browser` : CLI d'automatisation de navigateur pour agents (naviguer, remplir des formulaires, cliquer, faire des captures, extraire des données, tester une app). S'installe avec `npm i -g agent-browser && agent-browser install`, qui télécharge Chromium. Le skill principal est `skills/agent-browser`. Les sous-skills de `skill-data/` (Slack, Electron, Vercel Sandbox, AWS AgentCore…) sont chargés à la demande. Sa description demande à être préféré à tout autre outil web : à garder en tête.
 - `skills/claude-blog` : 32 skills de blogging (rédaction, réécriture, audit SEO/GEO, clusters thématiques, calendrier éditorial, traduction, schéma, images, audio, fact-check…). Même auteur que claude-ads. Les images et l'audio passent par l'API Google Gemini (`GOOGLE_AI_API_KEY`). L'installeur copie les skills dans `~/.claude/skills` et `~/.claude/agents`. `brain/` est un coffre de connaissances de l'auteur et ses `.raw/` contiennent une copie des mêmes skills : ils sont exclus de l'index.
 - `skills/founder-skill` : 11 skills pour tester un projet d'entreprise avant de le lancer (conseil d'administration, directeur marketing, CFO et marges, panel de 100 clients simulés, prix par Van Westendorp, offre, concurrents, marque, opérations, lancement, business plan). Scripts Python sans dépendance ni réseau, sans clé API.
-- `skills/impeccable` : **à installer pour le prochain site web de l'utilisateur.** Vocabulaire de design pour l'agent, avec 24 commandes `/impeccable` (`init`, `critique`, `audit`, `polish`, `bolder`, `document`…), un détecteur d'« AI slop » à 62 règles déterministes et des revues d'accessibilité et de performance classées de P0 à P3. Installation recommandée depuis la racine du projet : `npx impeccable install`, puis `/impeccable init` (qui écrit `PRODUCT.md`). Il ajoute des hooks au projet : au démarrage de session, après chaque Edit/Write (contrôle UI) et à l'arrêt (passe de design). Il exécute un binaire natif téléchargé depuis les releases GitHub officielles et vérifié par `engine-checksums.txt`. Non copiés : le code Rust du moteur, les tests, l'extension VS Code et les dossiers propres aux autres agents (disponibles dans le dépôt d'origine).
+- `skills/impeccable` : **fait partie du kit UI du prochain site web (voir plus haut).** Vocabulaire de design pour l'agent, avec 24 commandes `/impeccable` (`init`, `critique`, `audit`, `polish`, `bolder`, `document`…), un détecteur d'« AI slop » à 62 règles déterministes et des revues d'accessibilité et de performance classées de P0 à P3. Installation recommandée depuis la racine du projet : `npx impeccable install`, puis `/impeccable init` (qui écrit `PRODUCT.md`). Il ajoute des hooks au projet : au démarrage de session, après chaque Edit/Write (contrôle UI) et à l'arrêt (passe de design). Il exécute un binaire natif téléchargé depuis les releases GitHub officielles et vérifié par `engine-checksums.txt`. Non copiés : le code Rust du moteur, les tests, l'extension VS Code et les dossiers propres aux autres agents (disponibles dans le dépôt d'origine).
+- `skills/huashu-design` : skill **en chinois** (il fonctionne aussi en français). Il produit des prototypes HTML haute fidélité, des slides, des animations, des visualisations et des revues d'expert, et propose toujours 3 directions de design avant d'exécuter. Les exports PDF/PPTX/vidéo passent par Node (playwright, sharp, pptxgenjs). Options cloud : TTS Doubao et revue vidéo Volcengine, avec clés `.env`, facultatives. `scripts/design-gate-hook.sh` est un hook optionnel qui bloque le rendu d'une longue vidéo sans direction validée. Passé sous MIT le 2026-05-14, usage commercial autorisé.
+- `skills/ui-ux-pro-max` : base de données consultable (styles UI, palettes, paires de polices, types de graphiques, règles UX, conseils par stack) avec script de recherche Python. `.claude/skills/` contient aussi `banner-design`, `brand`, `design`, `design-system`, `slides` et `ui-styling`. `stack/.mcp.json` propose les MCP Playwright, Chrome DevTools et shadcn (facultatif).
+- `skills/taste-skill` : « tasteskill v2 », direction artistique pour sites web tirée de l'étude de 247 sites de galeries (Awwwards, One Page Love). Il pioche une direction (idée, composition, typo, palette, photos, structure des sections) dans une bibliothèque et impose des règles anti-« slop ».
+- `skills/playwright-cli` : skill officiel Microsoft pour piloter Chromium, Firefox ou WebKit via `playwright-cli` (ouvrir le site, cliquer, capturer, tester). Le serveur MCP équivalent est [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp) (`npx @playwright/mcp@latest`), qui n'est pas copié.
 - `skills/ai-marketing` : orchestrateur `market/` + 14 skills `skills/market-*` + agents + scripts Python (stdlib ; `reportlab` optionnel pour les PDF). Ses scripts récupèrent les pages web à analyser. L'installation passe par `install.sh` (copie dans `~/.claude/skills` et `~/.claude/agents`), ou se fait à la main.
 - `skills/claude-ads` : orchestrateur `ads/` + 33 skills `skills/ads-*` + 25 agents + bibliothèque Python `claude_ads_core`. Son `install.sh` crée un venv avec des dépendances verrouillées par hash (requests, playwright, weasyprint…). Modifier des campagnes réelles demande les tokens API des régies et une approbation explicite. Le `CLAUDE.md` de ce dossier sert au développement du projet, pas à la réserve.
 

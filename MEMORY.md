@@ -27,7 +27,7 @@ Règles d'écriture : une ligne par entrée, datée (AAAA-MM-JJ), en français ;
 
 ## En suspens
 
-- 2026-10-31 — Veille YouTube : l'utilisateur doit créer le dépôt `joachimvc42/veille-youtube` (privé conseillé), ajouter `GEMINI_API_KEY` aux variables de l'environnement cloud et autoriser `www.youtube.com`. Fichiers prêts (agents, skill watch, sources.md) à pousser dès que le dépôt existe ; `sources.md` à compléter avec ses chaînes.
-- 2026-10-31 — Lancer `local/install-5-skills.ps1` sur son ordinateur Windows (inclut claude-mem ; context7 via `local/install-local.ps1`).
+- 2026-10-31 — Veille YouTube : l'utilisateur doit créer le dépôt `joachimvc42/veille-youtube` (privé conseillé), ajouter `GEMINI_API_KEY` aux variables de l'environnement cloud et autoriser `www.youtube.com`. Fichiers prêts dans `templates/veille-youtube/` (agents, skill watch, sources.md) : les copier à la racine du nouveau dépôt et pousser ; `sources.md` à compléter avec ses chaînes.
+- 2026-10-31 — `local/install-5-skills.ps1` lancé sur Windows (claude-mem confirmé). Reste : `git pull` puis relancer `local/install-local.ps1 context7` (script corrigé), et vérifier `/plugin` (superpowers) et `/skills` (find-skills, impeccable, task-observer).
 - 2026-10-31 — Dépôt `skill-reserve` public : l'utilisateur peut le passer en privé (il contient notamment `Apple_HIG.pdf`, © Apple).
 - 2026-10-31 — Remotion : licence payante pour les entreprises de plus de 3 personnes. À vérifier avant un usage professionnel.

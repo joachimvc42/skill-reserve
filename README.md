@@ -5,6 +5,7 @@ Réserve personnelle de skills Claude Code et de ressources de référence. **Ri
 Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 
 - [`MEMORY.md`](MEMORY.md) : mémoire de travail (préférences, décisions, tâches en suspens), lue et tenue à jour par Claude à chaque session.
+- [`templates/veille-youtube/`](templates/veille-youtube) : modèle prêt du dépôt de veille YouTube (skill `/watch` en moteur Gemini, agents `veille` et `analyse`, `sources.md`).
 - [`references/sites.md`](references/sites.md) : sites web mis de côté (services en ligne, pas des skills).
 - [`local/install-local.ps1`](local/install-local.ps1) (Windows/PowerShell) et [`local/install-local.sh`](local/install-local.sh) (Mac/Linux) : installent sur l'ordinateur de l'utilisateur context7 et claude-mem en mode local, sans compte ni télémétrie.
 - [`local/install-5-skills.ps1`](local/install-5-skills.ps1) (Windows) : installe pour l'utilisateur les « 5 skills qui rendent Claude autonome » (find-skills, superpowers, claude-mem, impeccable, task-observer), avec versions figées et télémétrie coupée.

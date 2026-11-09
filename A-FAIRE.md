@@ -2,7 +2,7 @@
 
 Les actions que **toi seul** peux faire : créer un dépôt, obtenir une clé, changer un réglage, lancer quelque chose sur ton ordinateur. Claude ajoute une ligne chaque fois qu'il te demande quelque chose, et la supprime dès que tu lui dis que c'est fait.
 
-Dernière mise à jour : 2026-10-31.
+Dernière mise à jour : 2026-11-09.
 
 ## À faire maintenant
 

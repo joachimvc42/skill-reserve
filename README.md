@@ -16,7 +16,7 @@ Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 | Dossier | Source | Commit | Licence |
 |---|---|---|---|
 | `skills/brag/` | [latent-spaces/brag](https://github.com/latent-spaces/brag) | `669ab92` | MIT (musique CC BY 4.0, voir `assets/music/README.md`) |
-| `skills/ecc/` | [affaan-m/ecc](https://github.com/affaan-m/ecc) (`skills/`) | `b38be6a` | MIT |
+| `skills/ecc/` | [affaan-m/ecc](https://github.com/affaan-m/ecc) (`skills/`) | `d2ef268` (contenu identique à `b38be6a`, revérifié le 2026-11-09) | MIT |
 | `skills/humanizer/` | [blader/humanizer](https://github.com/blader/humanizer) (dépôt complet) | `0ef9fe5` | MIT |
 | `skills/tutor-skills/` | [bevibing/tutor-skills](https://github.com/bevibing/tutor-skills) (dépôt complet) | `397110c` | MIT |
 | `skills/youtube-skills/` | [ZeroPointRepo/youtube-skills](https://github.com/ZeroPointRepo/youtube-skills) (dépôt complet) | `4f7994b` | MIT |
@@ -61,7 +61,7 @@ Le catalogue complet (une ligne par élément) est dans [`INDEX.md`](INDEX.md).
 | `skills/academic-research-skills/` | [Imbad0202/academic-research-skills](https://github.com/Imbad0202/academic-research-skills) (sans `evals/`) | `f2d109e` | **CC BY-NC 4.0** (pas d'usage commercial) |
 | `skills/ai-marketing/` | [zubair-trabzada/ai-marketing-claude](https://github.com/zubair-trabzada/ai-marketing-claude) (dépôt complet) | `e5aa0ea` | MIT |
 | `skills/claude-ads/` | [AgriciDaniel/claude-ads](https://github.com/AgriciDaniel/claude-ads) (dépôt complet) | `fc3908e` | MIT |
-| `references/ecc-extras/` | [affaan-m/ecc](https://github.com/affaan-m/ecc) (`agents/`, `commands/`, `rules/`) | `b38be6a` | MIT |
+| `references/ecc-extras/` | [affaan-m/ecc](https://github.com/affaan-m/ecc) (`agents/`, `commands/`, `rules/`) | `d2ef268` | MIT |
 | `references/public-apis/` | [public-apis/public-apis](https://github.com/public-apis/public-apis) | `2098dd7` | MIT |
 | `references/r3f/` | [AliKhan-Devs/R3F](https://github.com/AliKhan-Devs/R3F) | `61281b5` | voir dépôt d'origine ; modèles 3D : voir `license.txt` de chaque modèle |
 
